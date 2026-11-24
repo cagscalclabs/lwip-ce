@@ -1,16 +1,33 @@
 #!/usr/bin/env python3
-"""Bridge lwIP-CE's length-prefixed CDC-ACM frames to the internet on macOS.
+"""Bridge lwIP-CE's length-prefixed CDC-ACM frames to the internet.
 
-The calculator is the network client. This local program answers DHCP and
-ARP, forwards its IPv4 packets through a utun interface, and applies a PF NAT
-rule on the Mac's selected uplink. See tools/bridge/README.md for the network
-path, host changes, and cleanup behavior.
+The calculator is the network client. This local program answers DHCP (and
+the Wi-Fi bridge's crypto offload, if asked) and hands everything else to the
+host kernel, which routes and NATs it out of the selected uplink.
+
+macOS
+    Talks to the calculator through the cu.usbmodem serial port, forwards
+    IPv4 through a utun interface, answers ARP itself, and loads a PF NAT
+    anchor. Needs root.
+
+Linux
+    Talks to the calculator directly over libusb (pyusb), detaching cdc_acm
+    for the duration, and forwards ARP and IPv4 through a TAP interface, so
+    the kernel does ARP as well. Needs pyusb. Two ways to run:
+
+    * as root: creates a temporary TAP interface, enables IPv4 forwarding on
+      it and the uplink, adds an nftables masquerade table, and (if firewalld
+      is running) puts the interface in the trusted zone. All of it is undone
+      on exit.
+    * unprivileged: point --tap at a persistent TAP interface you own that
+      is already addressed and NATed, and grant USB access with a udev rule.
+      --print-setup prints the one-time root commands for that.
 """
 
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import glob
 import os
 import platform
@@ -18,6 +35,7 @@ import re
 import select
 import socket
 import struct
+import subprocess
 import sys
 import termios
 import time
@@ -29,10 +47,9 @@ ETH_MAX = 1514
 USB_MPS = 64     # bulk max packet size
 
 # The Wi-Fi bridge's control protocol, from src/wireless/wifi_proto.h. The
-# calculator sends these unprompted when it is looking for a bridge, so a
-# host-side bridge that does not know the type loses frame sync the first
-# time one arrives: there is no length field to recover from, so the parser
-# starts discarding bytes and never realigns.
+# calculator sends these unprompted when it is looking for a bridge; the
+# bridge answers the crypto operations (--accelerate-crypto) and ignores the
+# rest.
 CTL_ETHERTYPE = 0x88B5
 CTL_HEADER = 18          # dst/src/type(14) + version, opcode, id, status
 CTL_VERSION = 1
@@ -54,10 +71,6 @@ CTL_OP_NAMES = {
 }
 
 
-class MissingP256LengthHint(ValueError):
-    """The calculator uses the old ambiguous P-256 byte-stream format."""
-
-
 def zlp_needed(length: int) -> bool:
     """True if a frame needs a terminating zero-length packet.
 
@@ -69,110 +82,11 @@ def zlp_needed(length: int) -> bool:
     return length % USB_MPS == 0
 
 
-def frame_length(buf: bytes) -> int | None:
-    """Total frame length from the headers.
-
-    None when more bytes are needed, 0 when the buffer does not start with
-    something parseable (the caller resyncs).
-
-    Only needed when USB transfer boundaries were lost, i.e. reading a tty.
-    The PyUSB path gets exact lengths from the transfer itself.
-    """
-    if len(buf) < ETH_HDR:
-        return None
-    et = (buf[12] << 8) | buf[13]
-
-    if et == 0x0800:                      # IPv4
-        if len(buf) < 18:
-            return None
-        if (buf[14] >> 4) != 4:
-            return 0
-        total = (buf[16] << 8) | buf[17]
-        return ETH_HDR + total if total >= 20 else 0
-    if et == 0x0806:                      # ARP over ethernet/IPv4
-        return ETH_HDR + 28
-    if et == 0x86DD:                      # IPv6
-        if len(buf) < 20:
-            return None
-        return ETH_HDR + 40 + ((buf[18] << 8) | buf[19])
-    if et == CTL_ETHERTYPE:
-        if len(buf) < CTL_HEADER:
-            return None
-        if buf[14] != CTL_VERSION or buf[15] & CTL_REPLY:
-            return 0
-        op = buf[15]
-        if op == 11:                # X25519: scalar + point
-            return CTL_HEADER + 64
-        if op == 12:                # RSA: variable modulus and exponent
-            if len(buf) < CTL_HEADER + 36:
-                return None
-            modulus = buf[CTL_HEADER + 33] | (buf[CTL_HEADER + 34] << 8)
-            exponent = buf[CTL_HEADER + 35]
-            if not 1 <= modulus <= 512 or not 1 <= exponent <= 255:
-                return 0
-            return CTL_HEADER + 36 + 2 * modulus + exponent
-        if op == 13:                # random: count
-            return CTL_HEADER + 1
-        if op == 14:                # P-256: request length hint in byte 17
-            if buf[17] not in (32, 97):
-                raise MissingP256LengthHint(
-                    f"P-256 request has invalid length hint {buf[17]}; "
-                    "rebuild the calculator with the updated "
-                    "src/wireless/crypto.c")
-            return CTL_HEADER + buf[17]
-        if op == 15:                # ECDSA P-256 verify
-            return CTL_HEADER + 161
-        return CTL_HEADER
-    # 802.3 length rather than an EtherType. A zero or tiny length is not a
-    # real frame -- it is almost always a misaligned read, and treating it as
-    # a valid 14-byte frame makes the parser consume garbage forever instead
-    # of resyncing (observed: a desync produced an endless run of "0x0000
-    # 14B" lines).
-    if 46 <= et <= 1500:
-        return ETH_HDR + et
-    return 0
-
-
-class FrameReassembler:
-    """Recover frame boundaries from a byte stream that lost them (legacy mode).
-
-    Consumes exactly the header-derived length. An earlier version rounded up
-    to the 60-byte Ethernet minimum on the assumption that short frames are
-    padded; the calculator does not pad, so that ate the first bytes of the
-    next frame and showed up as resyncs on live traffic.
-
-    resync_bytes counts bytes discarded to regain sync, so callers can tell
-    whether reassembly is actually holding rather than assume it.
-    """
-
-    def __init__(self) -> None:
-        self.buf = bytearray()
-        self.frames = 0
-        self.resync_bytes = 0
-
-    def feed(self, chunk: bytes):
-        self.buf += chunk
-        while self.buf:
-            n = frame_length(bytes(self.buf))
-            if n is None:
-                return
-            if n == 0 or n > ETH_MAX or n < ETH_HDR:
-                del self.buf[0]
-                self.resync_bytes += 1
-                continue
-            if len(self.buf) < n:
-                return
-            frame = bytes(self.buf[:n])
-            del self.buf[:n]
-            self.frames += 1
-            yield frame
-
-
 class LengthPrefixReassembler:
     """Recover frames from a 2-byte big-endian length-prefixed byte stream.
 
-    Wire format: [len_hi][len_lo][payload...].  Works regardless of how the
-    OS chunks USB transfers -- required for macOS ACM tty.
+    Wire format: [len_hi][len_lo][payload...]. Works regardless of how the
+    OS or USB stack chunks the bytes.
     """
 
     def __init__(self) -> None:
@@ -224,75 +138,72 @@ def describe_frame(f: bytes) -> str:
 
 
 def find_calculator_tty() -> str | None:
-    """The serial port belonging to our VID/PID, or None if not attached.
+    """macOS: the serial port belonging to our VID/PID, or None.
 
     Matching on hardware identity rather than taking the first usbmodem*:
     other CDC devices create ports too, and writing Ethernet frames into
-    somebody's modem would be rude. On macOS the IORegistry carries the
-    idVendor/idProduct next to the port name; elsewhere fall back to the
-    by-id symlinks, which encode the same thing.
+    somebody's modem would be rude. The IORegistry carries the
+    idVendor/idProduct next to the port name.
     """
-    if platform.system() == "Darwin":
-        import subprocess
-        try:
-            out = subprocess.run(
-                ["ioreg", "-r", "-c", "IOUSBHostDevice", "-l"],
-                capture_output=True, text=True, timeout=10).stdout
-        except Exception:
-            out = ""
-        # Walk the device's subtree: the dialin device appears under the
-        # ACM data interface, after the matching idVendor/idProduct.
-        want_v, want_p = f'"idVendor" = {VID}', f'"idProduct" = {PID}'
-        in_device = False
-        for line in out.splitlines():
-            if want_v in line:
-                in_device = True
-            elif '"idVendor" =' in line and want_v not in line:
-                in_device = False
-            if in_device and "IODialinDevice" in line:
-                part = line.split('"IODialinDevice"', 1)[1]
-                if '"' in part:
-                    return part.split('"')[1]
-        # The registry walk can miss it depending on nesting; fall back to
-        # the glob only when exactly one candidate exists.
-        found = sorted(glob.glob("/dev/cu.usbmodem*"))
-        return found[0] if len(found) == 1 else None
-
-    for pattern in (f"/dev/serial/by-id/*{VID:04x}*{PID:04x}*",
-                    f"/dev/serial/by-id/*{VID:04X}*{PID:04X}*"):
-        found = sorted(glob.glob(pattern))
-        if found:
-            return found[0]
-    found = sorted(glob.glob("/dev/ttyACM*"))
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ioreg", "-r", "-c", "IOUSBHostDevice", "-l"],
+            capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        out = ""
+    # Walk the device's subtree: the dialin device appears under the
+    # ACM data interface, after the matching idVendor/idProduct.
+    want_v = f'"idVendor" = {VID}'
+    in_device = False
+    for line in out.splitlines():
+        if want_v in line:
+            in_device = True
+        elif '"idVendor" =' in line and want_v not in line:
+            in_device = False
+        if in_device and "IODialinDevice" in line:
+            part = line.split('"IODialinDevice"', 1)[1]
+            if '"' in part:
+                return part.split('"')[1]
+    # The registry walk can miss it depending on nesting; fall back to
+    # the glob only when exactly one candidate exists.
+    found = sorted(glob.glob("/dev/cu.usbmodem*"))
     return found[0] if len(found) == 1 else None
 
 
-def wait_for_calculator(port: str | None, quiet: bool = False) -> str:
-    """Block until the calculator's port exists, then return it.
+def find_calculator_usb():
+    """Linux: the calculator's pyusb device, or None if not attached."""
+    import usb.core
+    return usb.core.find(idVendor=VID, idProduct=PID)
+
+
+def wait_for(finder, what: str, quiet: bool = False):
+    """Block until finder() returns something, then return it.
 
     The bridge should be startable before the calculator is plugged in or
     lwIP is launched, and should survive a replug -- the device disappears
     and comes back whenever lwIP restarts.
     """
-    if port:
-        while not os.path.exists(port):
-            if not quiet:
-                print(f"waiting for {port} ...", end="\r", flush=True)
-            time.sleep(0.5)
-        return port
-
     announced = False
     while True:
-        found = find_calculator_tty()
+        found = finder()
         if found:
             if announced:
                 print(" " * 60, end="\r")
             return found
         if not announced and not quiet:
-            print(f"waiting for the calculator "
-                  f"({VID:04X}:{PID:04X}) ...", end="\r", flush=True)
+            print(f"waiting for {what} ...", end="\r", flush=True)
             announced = True
         time.sleep(0.5)
+
+
+def wait_for_calculator(port: str | None, quiet: bool = False) -> str:
+    """macOS: block until the calculator's serial port exists."""
+    if port:
+        return wait_for(lambda: port if os.path.exists(port) else None,
+                        port, quiet)
+    return wait_for(find_calculator_tty,
+                    f"the calculator ({VID:04X}:{PID:04X})", quiet)
 
 
 def open_tty(port: str):
@@ -319,17 +230,20 @@ class SerialFrameWriteError(Exception):
     """A frame could not be sent as one complete serial write."""
 
 
-def write_frame(fd: int, frame: bytes) -> None:
-    """Send a whole frame and drain it before queuing the next frame.
-
-    Prepends a 2-byte big-endian length prefix; pads to avoid a ZLP if the
-    total wire length is an exact MPS multiple.
-    """
+def frame_wire(frame: bytes) -> bytes:
+    """A frame as it goes on the wire: 2-byte big-endian length prefix, and a
+    pad byte if the total would be an exact MPS multiple (see zlp_needed)."""
     n = len(frame)
-    prefix = bytes([n >> 8, n & 0xFF])
-    wire = prefix + frame
+    wire = bytes([n >> 8, n & 0xFF]) + frame
     if zlp_needed(len(wire)):
         wire += b"\x00"
+    return wire
+
+
+def write_frame(fd: int, frame: bytes) -> None:
+    """Send a whole frame and drain it before queuing the next frame."""
+    wire = frame_wire(frame)
+    n = len(frame)
 
     deadline = time.monotonic() + 2.0
     while True:
@@ -348,6 +262,209 @@ def write_frame(fd: int, frame: bytes) -> None:
             f"short serial write: {written}/{len(wire)} bytes; "
             "the calculator may have received a partial Ethernet frame")
     termios.tcdrain(fd)
+
+
+class TtyLink:
+    """macOS: the calculator's CDC-ACM serial port."""
+
+    def __init__(self, port: str) -> None:
+        self.name = port
+        self.fd = open_tty(port)
+
+    def read(self) -> bytes:
+        """Whatever bytes are waiting, without blocking."""
+        try:
+            return os.read(self.fd, 4096)
+        except BlockingIOError:
+            return b""
+
+    def write_frame(self, frame: bytes) -> None:
+        write_frame(self.fd, frame)
+
+    def close(self) -> None:
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
+class UsbLink:
+    """Linux: the calculator's CDC-ACM interfaces, driven over libusb.
+
+    Going around the tty keeps cdc_acm's line discipline, buffering and
+    write splitting out of the path entirely; the bridge sees the same
+    length-prefixed byte stream either way, so the framing code is shared.
+
+    Reads run on a thread with a short timeout and land in a queue, so the
+    bridge loop can poll without blocking. A timed-out bulk read does not
+    lose data: pyusb (1.2+) returns what libusb transferred before the
+    timeout instead of raising.
+    """
+
+    COMM_CLASS, DATA_CLASS = 0x02, 0x0A
+    SET_CONTROL_LINE_STATE = 0x22
+    DTR = 0x0001
+
+    def __init__(self, dev) -> None:
+        import queue
+        import threading
+        import usb.core
+        import usb.util
+
+        self.usb = usb
+        self.dev = dev
+        self.name = (f"usb {dev.bus:03d}:{dev.address:03d} "
+                     f"({VID:04X}:{PID:04X})")
+        self.detached: list[int] = []
+        self.claimed: list[int] = []
+        self.queue: queue.Queue = queue.Queue()
+        self.error: BaseException | None = None
+        self.closing = False
+
+        try:
+            cfg = dev.get_active_configuration()
+        except usb.core.USBError:
+            dev.set_configuration()
+            cfg = dev.get_active_configuration()
+
+        comm = data = None
+        for intf in cfg:
+            if intf.bAlternateSetting:
+                continue
+            if intf.bInterfaceClass == self.COMM_CLASS and comm is None:
+                comm = intf
+            elif intf.bInterfaceClass == self.DATA_CLASS and data is None:
+                data = intf
+        if comm is None or data is None:
+            raise RuntimeError("calculator does not expose CDC-ACM "
+                               "communication and data interfaces")
+
+        def bulk(direction):
+            return usb.util.find_descriptor(
+                data, custom_match=lambda e:
+                usb.util.endpoint_direction(e.bEndpointAddress) == direction
+                and usb.util.endpoint_type(e.bmAttributes)
+                == usb.util.ENDPOINT_TYPE_BULK)
+
+        self.ep_in = bulk(usb.util.ENDPOINT_IN)
+        self.ep_out = bulk(usb.util.ENDPOINT_OUT)
+        if self.ep_in is None or self.ep_out is None:
+            raise RuntimeError("calculator's CDC data interface has no "
+                               "bulk endpoint pair")
+
+        try:
+            # cdc_acm owns both interfaces; take them for the session and
+            # hand them back in close() so /dev/ttyACM* returns afterwards.
+            for n in (comm.bInterfaceNumber, data.bInterfaceNumber):
+                if dev.is_kernel_driver_active(n):
+                    dev.detach_kernel_driver(n)
+                    self.detached.append(n)
+                usb.util.claim_interface(dev, n)
+                self.claimed.append(n)
+            # DTR raises the calculator's netif link (device_apply_dtr).
+            dev.ctrl_transfer(0x21, self.SET_CONTROL_LINE_STATE, self.DTR,
+                              comm.bInterfaceNumber, None, timeout=1000)
+        except BaseException:
+            self.close()
+            raise
+
+        self.thread = threading.Thread(target=self._reader, daemon=True,
+                                       name="usb-reader")
+        self.thread.start()
+
+    def _reader(self) -> None:
+        size = self.ep_in.wMaxPacketSize * 32
+        while not self.closing:
+            try:
+                data = self.ep_in.read(size, timeout=200)
+            except self.usb.core.USBTimeoutError:
+                continue
+            except BaseException as e:
+                if not self.closing:
+                    self.queue.put(e)
+                return
+            if data:
+                self.queue.put(bytes(data))
+
+    def read(self) -> bytes:
+        """Whatever bytes the reader thread has collected, without blocking.
+
+        A reader failure (normally the device going away) is raised as the
+        OSError pyusb reported, after any bytes that arrived before it.
+        """
+        import queue
+
+        if self.error is not None:
+            raise self.error
+        chunks = []
+        while True:
+            try:
+                item = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(item, BaseException):
+                self.error = item
+                break
+            chunks.append(item)
+        if not chunks and self.error is not None:
+            raise self.error
+        return b"".join(chunks)
+
+    STALL_LIMIT = 30.0          # seconds with no bytes accepted
+
+    def write_frame(self, frame: bytes) -> None:
+        """Send a whole frame, waiting out the calculator's busy spells.
+
+        The calculator only takes OUT packets while its software services
+        the USB controller, so it NAKs for as long as it is busy elsewhere
+        (a TLS handshake's crypto takes seconds). That is flow control, not
+        failure: a timed-out write reports the bytes that did go through, and
+        the rest follows as another transfer -- the device reassembles from
+        the length prefix, not from transfer boundaries. This matches the
+        macOS path, where tcdrain() waits for as long as it takes.
+
+        The remainder can never be an exact MPS multiple (frame_wire avoids
+        that for the whole, and a partial write is whole packets), so every
+        transfer still ends in a short packet.
+        """
+        wire = frame_wire(frame)
+        sent = 0
+        last_progress = time.monotonic()
+        while sent < len(wire):
+            try:
+                n = self.ep_out.write(wire[sent:], timeout=1000)
+            except self.usb.core.USBTimeoutError:
+                n = 0                    # timed out before any byte went out
+            if n:
+                sent += n
+                last_progress = time.monotonic()
+            elif time.monotonic() - last_progress > self.STALL_LIMIT:
+                raise SerialFrameWriteError(
+                    f"calculator accepted no data for {self.STALL_LIMIT:.0f}s "
+                    f"({sent}/{len(wire)} bytes of a {len(frame)}-byte frame "
+                    "sent); it is likely hung")
+
+    def close(self) -> None:
+        self.closing = True
+        thread = getattr(self, "thread", None)
+        if thread is not None:
+            thread.join(timeout=1.0)
+        for n in self.claimed:
+            try:
+                self.usb.util.release_interface(self.dev, n)
+            except Exception:
+                pass
+        for n in self.detached:
+            try:
+                self.dev.attach_kernel_driver(n)
+            except Exception:
+                pass
+        self.claimed.clear()
+        self.detached.clear()
+        try:
+            self.usb.util.dispose_resources(self.dev)
+        except Exception:
+            pass
 
 
 class CryptoResponder:
@@ -468,9 +585,8 @@ class CryptoResponder:
 class MiniNet:
     """Answers ARP and DHCP so the calculator gets an address.
 
-    Deliberately minimal: one lease, no renewal bookkeeping, no relaying. It
-    exists to prove the link end to end and to give something to ping, not to
-    be a DHCP server.
+    Deliberately minimal: one lease, no renewal bookkeeping, no relaying.
+    Everything past getting an address is the host kernel's job.
     """
 
     def __init__(self, host_ip="10.84.0.1", client_ip="10.84.0.10",
@@ -478,26 +594,19 @@ class MiniNet:
         self.host_ip = bytes(int(x) for x in host_ip.split("."))
         self.client_ip = bytes(int(x) for x in client_ip.split("."))
         self.netmask = bytes(int(x) for x in netmask.split("."))
-        # Defaults are public resolvers so --bridge works out of the box.
-        # In --serve mode nothing routes anyway, so these go unanswered
-        # either way; the lease itself is what that mode is proving.
+        # Defaults are public servers so the bridge works out of the box.
         self.dns_ip = bytes(int(x) for x in (dns_ip or "1.1.1.1").split("."))
         self.ntp_ip = bytes(int(x) for x in (ntp_ip or "162.159.200.1").split("."))
         self.host_mac = bytes.fromhex("02cece000001")
         self.leased_to: bytes | None = None
-        self.echo_port = 7
-        self.echoed = 0
-        self.tcp: dict | None = None
-        # In --bridge mode the kernel answers ICMP and TCP for real, so the
-        # built-in responders must stand down: a local echo would make the
-        # calculator look connected while it reached nothing.
-        self.answer_icmp = True
-        self.answer_tcp = True
+        # On Linux the TAP interface is Ethernet, so the kernel answers ARP
+        # for its own address; answering here too would be redundant.
+        self.answer_arp = True
 
     def handle(self, f: bytes) -> bytes | None:
         et = (f[12] << 8) | f[13]
         if et == 0x0806:
-            return self._arp(f)
+            return self._arp(f) if self.answer_arp else None
         if et != 0x0800 or len(f) < 34:
             return None
         proto = f[23]
@@ -505,30 +614,7 @@ class MiniNet:
             dport = (f[36] << 8) | f[37]
             if dport == 67:
                 return self._dhcp(f)
-        elif proto == 1 and self.answer_icmp:
-            return self._icmp(f)
-        elif proto == 6 and self.answer_tcp:
-            return self._tcp_echo(f)
         return None
-
-    # -- helpers shared by the IP responders --------------------------------
-
-    @staticmethod
-    def _ip_checksum(hdr: bytes) -> int:
-        s = 0
-        for j in range(0, len(hdr), 2):
-            s += (hdr[j] << 8) | hdr[j + 1]
-        while s >> 16:
-            s = (s & 0xFFFF) + (s >> 16)
-        return ~s & 0xFFFF
-
-    def _ip_frame(self, dst_mac, dst_ip, proto, payload) -> bytes:
-        total = 20 + len(payload)
-        hdr = bytearray(struct.pack(">BBHHHBBH", 0x45, 0, total, 0, 0,
-                                    64, proto, 0))
-        hdr += self.host_ip + dst_ip
-        hdr[10:12] = struct.pack(">H", self._ip_checksum(bytes(hdr)))
-        return dst_mac + self.host_mac + b"\x08\x00" + bytes(hdr) + payload
 
     @staticmethod
     def _l4_checksum(src_ip, dst_ip, proto, body) -> int:
@@ -542,81 +628,6 @@ class MiniNet:
         while s >> 16:
             s = (s & 0xFFFF) + (s >> 16)
         return ~s & 0xFFFF
-
-    def _icmp(self, f: bytes) -> bytes | None:
-        """Answer echo requests, so the link can be pinged from the calc."""
-        ihl = (f[14] & 0x0F) * 4
-        icmp = f[14 + ihl:]
-        if len(icmp) < 8 or icmp[0] != 8:       # echo request only
-            return None
-        body = bytearray(icmp)
-        body[0] = 0                              # echo reply
-        body[2:4] = b"\x00\x00"
-        ck = self._ip_checksum(bytes(body) + (b"\x00" if len(body) % 2 else b""))
-        body[2:4] = struct.pack(">H", ck)
-        return self._ip_frame(f[6:12], f[26:30], 1, bytes(body))
-
-    def _tcp_echo(self, f: bytes) -> bytes | None:
-        """A single-connection TCP echo server, enough to ping-pong on.
-
-        Not a TCP stack: it answers SYN with SYN-ACK, echoes payload back in
-        an ACK, and closes on FIN. One connection at a time, no
-        retransmission, no window management. It exists so the calculator's
-        echo client has a peer without needing a TAP interface or a real
-        server on the host.
-        """
-        ihl = (f[14] & 0x0F) * 4
-        ip_off = 14
-        tcp_off = ip_off + ihl
-        if len(f) < tcp_off + 20:
-            return None
-        src_ip, dst_ip = f[26:30], f[30:34]
-        if dst_ip != self.host_ip:
-            return None
-        sport = (f[tcp_off] << 8) | f[tcp_off + 1]
-        dport = (f[tcp_off + 2] << 8) | f[tcp_off + 3]
-        if dport != self.echo_port:
-            return None
-        seq = struct.unpack(">I", f[tcp_off + 4:tcp_off + 8])[0]
-        ack = struct.unpack(">I", f[tcp_off + 8:tcp_off + 12])[0]
-        doff = (f[tcp_off + 12] >> 4) * 4
-        flags = f[tcp_off + 13]
-        payload = f[tcp_off + doff:]
-        # Trim any Ethernet padding the sender added.
-        ip_total = (f[ip_off + 2] << 8) | f[ip_off + 3]
-        payload = payload[:max(0, ip_total - ihl - doff)]
-
-        SYN, ACK_F, FIN, RST, PSH = 0x02, 0x10, 0x01, 0x04, 0x08
-
-        def seg(flags_out, seq_out, ack_out, body=b""):
-            t = bytearray(struct.pack(">HHIIBBHHH", self.echo_port, sport,
-                                      seq_out, ack_out, 5 << 4, flags_out,
-                                      4096, 0, 0))
-            t += body
-            ck = self._l4_checksum(self.host_ip, src_ip, 6, bytes(t))
-            t[16:18] = struct.pack(">H", ck)
-            return self._ip_frame(f[6:12], src_ip, 6, bytes(t))
-
-        if flags & RST:
-            self.tcp = None
-            return None
-        if flags & SYN and not (flags & ACK_F):
-            self.tcp = {"peer": (src_ip, sport), "our_seq": 0x1000,
-                        "their_seq": seq + 1}
-            return seg(SYN | ACK_F, self.tcp["our_seq"], seq + 1)
-        if not self.tcp or self.tcp["peer"] != (src_ip, sport):
-            return None
-        if flags & FIN:
-            self.tcp = None
-            return seg(FIN | ACK_F, self.tcp_final_seq(ack), seq + 1)
-        if payload:
-            self.echoed += len(payload)
-            our_seq = ack if ack else self.tcp["our_seq"] + 1
-            return seg(ACK_F | PSH, our_seq, seq + len(payload), payload)
-        return None
-
-    def tcp_final_seq(self, ack: int) -> int:
-        return ack
 
     def _arp(self, f: bytes) -> bytes | None:
         if len(f) < 42 or f[20:22] != b"\x00\x01":      # request only
@@ -715,9 +726,15 @@ def active_uplinks() -> list[str]:
 
     The one holding the default route comes first, since that is what the
     host itself uses; any other up-and-addressed interface follows, so
-    --odevice has something meaningful to choose from. Loopback, the utun we
-    create, and virtual bridges are skipped.
+    --odevice has something meaningful to choose from. Loopback, the
+    interface we create, and virtual bridges are skipped.
     """
+    if platform.system() == "Linux":
+        return TapHost.uplinks()
+    return macos_uplinks()
+
+
+def macos_uplinks() -> list[str]:
     import subprocess
 
     found: list[str] = []
@@ -751,10 +768,6 @@ def active_uplinks() -> list[str]:
     return found or ["en0"]
 
 
-def default_uplink() -> str:
-    return active_uplinks()[0]
-
-
 def route_interface(destination: str) -> str | None:
     """Interface macOS currently uses to reach one IPv4 destination."""
     import subprocess
@@ -783,7 +796,6 @@ def open_utun():
     import fcntl
 
     AF_SYSTEM, SYSPROTO_CONTROL = 32, 2
-    AF_SYS_CONTROL = 2
     CTLIOCGINFO = 0xC0644E03
     UTUN_OPT_IFNAME = 2
 
@@ -1122,74 +1134,93 @@ def pf_enable_token(output: str) -> str:
     return match.group(1)
 
 
-def cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
-               verbose: bool = True, tls_dump: bool = False,
-               watch: "ConnectionWatch | None" = None,
-               crypto: "CryptoResponder | None" = None,
-               save_hello: str | None = None) -> int:
-    with temporary_ipv4_forwarding():
-        return _cmd_bridge(fd, net, uplink, seconds, verbose, tls_dump,
-                           watch, crypto, save_hello)
-
-
-def _cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
-                verbose: bool = True, tls_dump: bool = False,
-                watch: "ConnectionWatch | None" = None,
-                crypto: "CryptoResponder | None" = None,
-                save_hello: str | None = None) -> int:
-    """Bridge the calculator onto the real network via utun + pf NAT.
+class UtunHost:
+    """macOS: the calculator's IPv4 goes through a utun and PF NAT.
 
     The bridge itself does almost nothing: DHCP and ARP (the kernel will not
     serve those on a point-to-point utun), plus Ethernet header removal and
     reattachment. Every protocol that matters is handled by the kernel.
     """
-    import subprocess
 
-    main_rules = subprocess.run(["pfctl", "-sn"], check=True,
-                                capture_output=True, text=True).stdout
-    anchor = select_pf_nat_anchor(main_rules)
-    tun, tun_name = open_utun()
-    host_ip = ".".join(str(b) for b in net.host_ip)
-    client_ip = ".".join(str(b) for b in net.client_ip)
+    forwards = (0x0800,)        # utun is layer 3, IPv4 only here
 
-    netmask = ".".join(str(b) for b in net.netmask)
-    # Without an explicit netmask ifconfig defaults a 10.x utun to /8, which
-    # makes the kernel treat all of 10.0.0.0/8 as on-link.
-    subprocess.run(["ifconfig", tun_name, host_ip, client_ip,
-                    "netmask", netmask, "up"], check=True)
-    # ifconfig normally installs the point-to-point host route itself. An
-    # unconditional `route add` printed "File exists" even when routing was
-    # correct, and a stale route to an old utun could silently steal replies.
-    current_route = route_interface(client_ip)
-    if current_route != tun_name:
-        subprocess.run(["route", "-q", "-n", "delete", "-host", client_ip],
-                       capture_output=True, check=False)
-        subprocess.run(["route", "-q", "-n", "add", "-host", client_ip,
-                        "-interface", tun_name], check=True)
+    def __init__(self, net: "MiniNet", uplink: str) -> None:
+        self.net = net
+        self.uplink = uplink
+        self.stack = ExitStack()
+
+    def __enter__(self) -> "UtunHost":
+        try:
+            self.stack.enter_context(temporary_ipv4_forwarding())
+            self._setup()
+        except BaseException:
+            self.stack.close()
+            raise
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stack.close()
+
+    def _setup(self) -> None:
+        import subprocess
+
+        net, uplink = self.net, self.uplink
+        main_rules = subprocess.run(["pfctl", "-sn"], check=True,
+                                    capture_output=True, text=True).stdout
+        anchor = select_pf_nat_anchor(main_rules)
+        self.tun, tun_name = open_utun()
+        self.stack.callback(self.tun.close)
+        host_ip = ".".join(str(b) for b in net.host_ip)
+        client_ip = ".".join(str(b) for b in net.client_ip)
+
+        netmask = ".".join(str(b) for b in net.netmask)
+        # Without an explicit netmask ifconfig defaults a 10.x utun to /8,
+        # which makes the kernel treat all of 10.0.0.0/8 as on-link.
+        subprocess.run(["ifconfig", tun_name, host_ip, client_ip,
+                        "netmask", netmask, "up"], check=True)
+        # ifconfig normally installs the point-to-point host route itself.
+        # An unconditional `route add` printed "File exists" even when
+        # routing was correct, and a stale route to an old utun could
+        # silently steal replies.
         current_route = route_interface(client_ip)
-    if current_route != tun_name:
-        tun.close()
-        raise RuntimeError(f"route to {client_ip} uses {current_route or 'no interface'}, "
-                           f"expected {tun_name}")
+        if current_route != tun_name:
+            subprocess.run(["route", "-q", "-n", "delete", "-host", client_ip],
+                           capture_output=True, check=False)
+            subprocess.run(["route", "-q", "-n", "add", "-host", client_ip,
+                            "-interface", tun_name], check=True)
+            current_route = route_interface(client_ip)
+        if current_route != tun_name:
+            raise RuntimeError(f"route to {client_ip} uses "
+                               f"{current_route or 'no interface'}, "
+                               f"expected {tun_name}")
 
-    rule = f"nat on {uplink} from {client_ip} to any -> ({uplink})\n"
-    print(f"\ninterface : {tun_name}  {host_ip} -> {client_ip}")
-    print(f"route     : {client_ip} via {current_route}")
-    print(f"uplink    : {uplink}")
-    print(f"pf rule   : {rule.strip()}")
+        rule = f"nat on {uplink} from {client_ip} to any -> ({uplink})\n"
+        print(f"\ninterface : {tun_name}  {host_ip} -> {client_ip}")
+        print(f"route     : {client_ip} via {current_route}")
+        print(f"uplink    : {uplink}")
+        print(f"pf rule   : {rule.strip()}")
 
-    # The anchor needs an active NAT anchor point and a PF enable reference.
-    # -E/-X avoids globally disabling PF if another service starts using it.
-    anchor_loaded = False
-    pf_token = None
-    try:
+        # The anchor needs an active NAT anchor point and a PF enable
+        # reference. -E/-X avoids globally disabling PF if another service
+        # starts using it.
         subprocess.run(["pfctl", "-a", anchor, "-f", "-"],
                        input=rule, text=True, check=True, capture_output=True)
-        anchor_loaded = True
+
+        def flush_anchor():
+            subprocess.run(["pfctl", "-a", anchor, "-F", "all"],
+                           capture_output=True)
+            print("pf        : NAT anchor flushed")
+        self.stack.callback(flush_anchor)
 
         en = subprocess.run(["pfctl", "-E"], check=True,
                             capture_output=True, text=True)
         pf_token = pf_enable_token(en.stdout + en.stderr)
+
+        def release_pf():
+            subprocess.run(["pfctl", "-X", pf_token], capture_output=True)
+            print("pf        : enable reference released")
+        self.stack.callback(release_pf)
+
         status = subprocess.run(["pfctl", "-s", "info"],
                                 check=True, capture_output=True, text=True).stdout
         if "Status: Enabled" not in status:
@@ -1199,15 +1230,364 @@ def _cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
         shown = subprocess.run(["pfctl", "-a", anchor, "-s", "nat"],
                                check=True, capture_output=True, text=True).stdout.strip()
         print(f"pf rules  : {shown or '(none -- NAT is not active)'}\n")
-    except BaseException:
-        if anchor_loaded:
-            subprocess.run(["pfctl", "-a", anchor, "-F", "all"],
-                           capture_output=True)
-        if pf_token is not None:
-            subprocess.run(["pfctl", "-X", pf_token], capture_output=True)
-        tun.close()
-        raise
 
+    def send(self, frame: bytes) -> None:
+        utun_write(self.tun, frame[14:])
+
+    def recv(self) -> bytes | None:
+        pkt = utun_read(self.tun)
+        if not pkt:
+            return None
+        dst_mac = self.net.leased_to or (b"\xff" * 6)
+        return dst_mac + self.net.host_mac + b"\x08\x00" + pkt
+
+
+# -- Linux ------------------------------------------------------------------
+
+TAP_PREFIX = "lwipce"
+NFT_TABLE = "lwip_ce_bridge"
+
+
+def netmask_prefix(mask: bytes) -> int:
+    return bin(int.from_bytes(mask, "big")).count("1")
+
+
+class TapHost:
+    """Linux: the calculator's Ethernet frames go through a TAP interface.
+
+    Two modes:
+
+    * created (needs root): a fresh TAP is addressed, IPv6 is disabled on it
+      (nothing NATs v6, and the kernel's multicast chatter would only cost
+      USB bandwidth), IPv4 forwarding is enabled on it and on the uplink,
+      an nftables table masquerades the calculator's address out of the
+      uplink, and firewalld (if running) gets the TAP in its trusted zone so
+      its forward chain does not reject the traffic. Each step is undone on
+      exit, in reverse.
+    * preconfigured: --tap names an interface that already exists (typically
+      a persistent TAP owned by the user, see --print-setup). Nothing on the
+      host is changed; the bridge only checks the address and adopts the
+      interface's MAC for its DHCP replies.
+    """
+
+    forwards = (0x0800, 0x0806)
+
+    def __init__(self, net: "MiniNet", uplink: str | None,
+                 name: str | None = None) -> None:
+        self.net = net
+        self.uplink = uplink
+        self.name = name
+        self.stack = ExitStack()
+        self.fd = -1
+
+    SKIP_UPLINKS = ("lo", "lwipce", "docker", "veth", "virbr", "br-")
+
+    @staticmethod
+    def interface_ipv4(name: str) -> str | None:
+        """Linux: the IPv4 address on an interface (SIOCGIFADDR), or None."""
+        import fcntl
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            try:
+                res = fcntl.ioctl(s, 0x8915, struct.pack("256s", name.encode()[:15]))
+            except OSError:
+                return None
+        return socket.inet_ntoa(res[20:24])
+
+    @staticmethod
+    def uplinks() -> list[str]:
+        """Default-route interfaces by metric, then others with IPv4."""
+        found: list[str] = []
+        # Default routes, lowest metric first.
+        defaults = []
+        try:
+            with open("/proc/net/route") as fh:
+                next(fh)
+                for line in fh:
+                    f = line.split()
+                    if (len(f) >= 8 and f[1] == "00000000" and f[7] == "00000000"
+                            and int(f[3], 16) & 1):          # RTF_UP
+                        defaults.append((int(f[6]), f[0]))
+        except OSError:
+            pass
+        for _, name in sorted(defaults):
+            if name not in found:
+                found.append(name)
+        for _, name in socket.if_nameindex():
+            if (name not in found and not name.startswith(TapHost.SKIP_UPLINKS)
+                    and TapHost.interface_ipv4(name)):
+                found.append(name)
+        return found
+
+    @staticmethod
+    def open_tap(name: str) -> tuple[int, str]:
+        """Open (creating if root and absent) a TAP interface; return (fd, name).
+
+        TAP rather than TUN: Linux has it, it carries Ethernet, and the
+        calculator speaks Ethernet -- so frames pass through untouched and the
+        kernel does ARP on its side like on any LAN. A non-persistent TAP
+        created here disappears, with its address and routes, when the fd
+        closes, which makes cleanup after a crash automatic.
+        """
+        import fcntl
+
+        TUNSETIFF = 0x400454CA
+        IFF_TAP, IFF_NO_PI = 0x0002, 0x1000
+        fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK)
+        try:
+            ifr = struct.pack("16sH22x", name.encode(), IFF_TAP | IFF_NO_PI)
+            res = fcntl.ioctl(fd, TUNSETIFF, ifr)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd, res[:16].split(b"\x00")[0].decode()
+
+    @staticmethod
+    def route_interface(destination: str) -> str | None:
+        import subprocess
+
+        out = subprocess.run(["ip", "-o", "-4", "route", "get", destination],
+                             capture_output=True, text=True).stdout
+        m = re.search(r"\bdev (\S+)", out)
+        return m.group(1) if m else None
+
+    @staticmethod
+    def write_sysctl(path: str, value: str) -> str:
+        """Write a /proc/sys value and return the one it replaced."""
+        with open(path) as fh:
+            old = fh.read().strip()
+        with open(path, "w") as fh:
+            fh.write(value)
+        return old
+
+    @staticmethod
+    def firewalld_running() -> bool:
+        import shutil
+        import subprocess
+
+        if not shutil.which("firewall-cmd"):
+            return False
+        return subprocess.run(["firewall-cmd", "--state"],
+                              capture_output=True).returncode == 0
+
+    @staticmethod
+    def print_setup(args, uplink: str | None) -> None:
+        """The one-time root commands for running the bridge unprivileged."""
+        import getpass
+
+        tap = args.tap or f"{TAP_PREFIX}0"
+        up = uplink or "UPLINK"
+        prefix = netmask_prefix(MiniNet().netmask)
+        import textwrap
+
+        print(textwrap.dedent(f"""\
+    # One-time setup, as root, so the bridge can run as {getpass.getuser()}.
+    # The network part lasts until reboot; the udev rule is permanent.
+
+    ip tuntap add dev {tap} mode tap user {getpass.getuser()}
+    ip link set dev {tap} address 02:ce:ce:00:00:01
+    sysctl -w net.ipv6.conf.{tap}.disable_ipv6=1
+    ip addr add {args.host_ip}/{prefix} dev {tap}
+    ip link set dev {tap} up
+    sysctl -w net.ipv4.conf.{tap}.forwarding=1 net.ipv4.conf.{up}.forwarding=1
+    nft add table ip {NFT_TABLE}
+    nft 'add chain ip {NFT_TABLE} postrouting {{ type nat hook postrouting priority srcnat; }}'
+    nft add rule ip {NFT_TABLE} postrouting ip saddr {args.client_ip} oifname '"{up}"' masquerade
+    firewall-cmd --zone=trusted --add-interface={tap}     # only if firewalld runs
+
+    # USB access for the logged-in user (also lets the bridge detach cdc_acm):
+    echo 'SUBSYSTEM=="usb", ATTR{{idVendor}}=="{VID:04x}", ATTR{{idProduct}}=="{PID:04x}", TAG+="uaccess"' \\
+        > /etc/udev/rules.d/70-lwip-ce.rules
+    udevadm control --reload && udevadm trigger
+
+    # Then, unprivileged:
+    #   python3 {sys.argv[0]} --tap {tap}
+    #
+    # To undo the network part:
+    #   nft delete table ip {NFT_TABLE}; ip link delete {tap}"""))
+
+
+    def __enter__(self) -> "TapHost":
+        try:
+            if self.name and os.path.exists(f"/sys/class/net/{self.name}"):
+                self._attach_existing()
+            else:
+                self._create()
+        except BaseException:
+            self.stack.close()
+            raise
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.stack.close()
+
+    def _open(self, name: str) -> None:
+        try:
+            self.fd, self.name = self.open_tap(name)
+        except PermissionError:
+            raise RuntimeError(
+                f"cannot attach to TAP interface {name}: it is not owned by "
+                "this user. Recreate it with `ip tuntap add ... user "
+                f"{os.environ.get('USER', '$USER')}` (see --print-setup) "
+                "or run as root.") from None
+        except FileNotFoundError:
+            raise RuntimeError("/dev/net/tun is missing; load the tun "
+                               "module (modprobe tun)") from None
+        fd = self.fd
+        self.stack.callback(lambda: os.close(fd))
+
+    def _attach_existing(self) -> None:
+        self._open(self.name)
+        sysfs = f"/sys/class/net/{self.name}"
+        with open(f"{sysfs}/address") as fh:
+            self.net.host_mac = bytes.fromhex(fh.read().strip().replace(":", ""))
+        host_ip = ".".join(str(b) for b in self.net.host_ip)
+        have = self.interface_ipv4(self.name)
+        print(f"\ninterface : {self.name} (preconfigured; host left unchanged)")
+        print(f"address   : {have or 'none'}  mac {mac_str(self.net.host_mac)}")
+        if have != host_ip:
+            print(f"warning   : {self.name} has {have or 'no IPv4 address'}, "
+                  f"but DHCP will name {host_ip} as the router; pass "
+                  f"--host-ip {have} or fix the interface", file=sys.stderr)
+        with open(f"{sysfs}/flags") as fh:
+            if not int(fh.read(), 16) & 0x1:                # IFF_UP
+                print(f"warning   : {self.name} is down "
+                      f"(ip link set dev {self.name} up)", file=sys.stderr)
+        print()
+
+    def _create(self) -> None:
+        import shutil
+        import subprocess
+
+        if os.geteuid() != 0:
+            hint = (f"{self.name} does not exist; " if self.name else "")
+            raise RuntimeError(
+                f"{hint}creating and configuring a TAP interface needs root. "
+                "Re-run with sudo, or set up a persistent interface once "
+                "(--print-setup) and pass it with --tap.")
+        for tool in ("ip", "nft"):
+            if not shutil.which(tool):
+                raise RuntimeError(f"`{tool}` not found; install "
+                                   f"{'iproute' if tool == 'ip' else 'nftables'}")
+        if not self.uplink:
+            raise RuntimeError("no outbound interface found; pass --odevice")
+
+        def run(*cmd: str) -> None:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+        net, uplink = self.net, self.uplink
+        self._open(self.name or f"{TAP_PREFIX}%d")
+        tap = self.name
+        host_ip = ".".join(str(b) for b in net.host_ip)
+        client_ip = ".".join(str(b) for b in net.client_ip)
+        prefix = netmask_prefix(net.netmask)
+
+        run("ip", "link", "set", "dev", tap, "address", mac_str(net.host_mac))
+        try:
+            self.write_sysctl(f"/proc/sys/net/ipv6/conf/{tap}/disable_ipv6", "1")
+        except OSError:
+            pass                             # IPv6 not built in: nothing to do
+        run("ip", "addr", "add", f"{host_ip}/{prefix}", "dev", tap)
+        run("ip", "link", "set", "dev", tap, "up")
+        current_route = self.route_interface(client_ip)
+        if current_route != tap:
+            raise RuntimeError(f"route to {client_ip} uses "
+                               f"{current_route or 'no interface'}, expected "
+                               f"{tap}; is {host_ip}/{prefix} already in use "
+                               "on another interface?")
+
+        # Per-interface forwarding rather than the global ip_forward switch:
+        # Linux decides on the ingress interface, so these two are all the
+        # path needs, and nothing else on the host starts routing.
+        self.write_sysctl(f"/proc/sys/net/ipv4/conf/{tap}/forwarding", "1")
+        up_path = f"/proc/sys/net/ipv4/conf/{uplink}/forwarding"
+        old = self.write_sysctl(up_path, "1")
+        if old != "1":
+            def restore_forwarding():
+                self.write_sysctl(up_path, old)
+                print(f"forwarding: restored to {old} on {uplink}")
+            self.stack.callback(restore_forwarding)
+            print(f"forwarding: enabled on {uplink} for this bridge run")
+
+        rule = (f"ip saddr {client_ip} oifname \"{uplink}\" masquerade")
+        ruleset = (f"table ip {NFT_TABLE} {{\n"
+                   f"  chain postrouting {{\n"
+                   f"    type nat hook postrouting priority srcnat; policy accept;\n"
+                   f"    {rule}\n"
+                   f"  }}\n"
+                   f"}}\n")
+        # A table left by a run that was killed would make `add` merge into
+        # it; replace it instead.
+        subprocess.run(["nft", "delete", "table", "ip", NFT_TABLE],
+                       capture_output=True)
+        subprocess.run(["nft", "-f", "-"], input=ruleset, text=True,
+                       check=True, capture_output=True)
+
+        def drop_table():
+            subprocess.run(["nft", "delete", "table", "ip", NFT_TABLE],
+                           capture_output=True)
+            print(f"nft       : table {NFT_TABLE} removed")
+        self.stack.callback(drop_table)
+
+        print(f"\ninterface : {tap}  {host_ip}/{prefix}  mac {mac_str(net.host_mac)}")
+        print(f"route     : {client_ip} via {current_route}")
+        print(f"uplink    : {uplink}")
+        print(f"nft rule  : {rule}")
+
+        if self.firewalld_running():
+            run("firewall-cmd", "--zone=trusted", f"--add-interface={tap}")
+
+            def leave_zone():
+                subprocess.run(["firewall-cmd", "--zone=trusted",
+                                f"--remove-interface={tap}"],
+                               capture_output=True)
+                print(f"firewalld : {tap} removed from the trusted zone")
+            self.stack.callback(leave_zone)
+            print(f"firewalld : {tap} in the trusted zone (runtime only)")
+        else:
+            # Without firewalld, a drop policy on some other forward chain
+            # (Docker installs one) still discards the traffic, and an accept
+            # here cannot override it.
+            rules = subprocess.run(["nft", "list", "ruleset"],
+                                   capture_output=True, text=True).stdout
+            if re.search(r"hook forward[^\n]*policy drop", rules):
+                print("warning   : a forward chain has policy drop; the "
+                      "calculator's traffic may be discarded unless that "
+                      f"chain accepts {tap} -> {uplink}", file=sys.stderr)
+        print()
+
+    def send(self, frame: bytes) -> None:
+        os.write(self.fd, frame)
+
+    def recv(self) -> bytes | None:
+        try:
+            frame = os.read(self.fd, ETH_MAX + 4)
+        except BlockingIOError:
+            return None
+        if len(frame) < ETH_HDR:
+            return None
+        # Only what the calculator needs: frames addressed to it, and
+        # broadcasts (the kernel's ARP requests). Multicast such as mDNS
+        # would just use up the USB link.
+        if frame[0] & 1 and frame[0:6] != b"\xff" * 6:
+            return None
+        if ((frame[12] << 8) | frame[13]) not in self.forwards:
+            return None
+        return frame
+
+
+# -- the bridge loop ---------------------------------------------------------
+
+def run_bridge(link, net: "MiniNet", host, seconds: float,
+               verbose: bool = True, tls_dump: bool = False,
+               watch: "ConnectionWatch | None" = None,
+               crypto: "CryptoResponder | None" = None,
+               save_hello: str | None = None) -> int:
+    """Move frames between the calculator and the host network.
+
+    host is a UtunHost or TapHost already entered; it decides which
+    EtherTypes go to the kernel and how frames come back.
+    """
     asm = LengthPrefixReassembler()
     start = time.time()
     last_tick = start
@@ -1219,55 +1599,53 @@ def _cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
             moved = False
 
             # calculator -> kernel
-            try:
-                chunk = os.read(fd, 4096)
-            except BlockingIOError:
-                chunk = b""
+            chunk = link.read()
             if chunk:
                 moved = True
                 for frame in asm.feed(chunk):
                     et = (frame[12] << 8) | frame[13]
                     if crypto and (reply := crypto.handle(frame, net.host_mac)):
-                        write_frame(fd, reply)
+                        link.write_frame(reply)
                         if verbose:
                             print("  <- " + describe_frame(frame))
                             print("  -> " + describe_frame(reply))
                         continue
-                    reply = net.handle(frame)      # DHCP + ARP only now
+                    reply = net.handle(frame)      # DHCP (+ ARP on macOS)
                     if reply:
                         if verbose:
                             print("  <- " + describe_frame(frame))
                             print("  -> " + describe_frame(reply))
-                        write_frame(fd, reply)
+                        link.write_frame(reply)
                         continue
-                    if et == 0x0800:
-                        if tls_dump:
-                            describe_tls(frame, "calc->net", save_to=save_hello)
-                        if watch:
-                            watch.observe(frame, outbound=True)
-                        wire_frame, old_mss = clamp_tcp_mss(frame)
-                        if old_mss is not None:
-                            print(f"     tcp MSS {old_mss} -> {ACM_SAFE_MSS} (ACM receive limit)")
-                        utun_write(tun, wire_frame[14:])
+                    if et in host.forwards:
+                        if et == 0x0800:
+                            if tls_dump:
+                                describe_tls(frame, "calc->net", save_to=save_hello)
+                            if watch:
+                                watch.observe(frame, outbound=True)
+                            frame, old_mss = clamp_tcp_mss(frame)
+                            if old_mss is not None:
+                                print(f"     tcp MSS {old_mss} -> {ACM_SAFE_MSS} "
+                                      "(ACM receive limit)")
+                        host.send(frame)
                         tx += 1
                         if verbose:
                             print(f"  out {describe_frame(frame)}")
                     elif verbose:
-                        # Not forwarded: utun is IPv4 here, and the control
+                        # Not forwarded: only IPv4 is NATed, and the control
                         # protocol is for the Wi-Fi bridge, not the network.
                         print(f"  --  {describe_frame(frame)}  (not forwarded)")
 
             # kernel -> calculator
-            pkt = utun_read(tun)
-            if pkt:
+            frame = host.recv()
+            if frame:
                 moved = True
-                dst_mac = net.leased_to or (b"\xff" * 6)
-                frame = dst_mac + net.host_mac + b"\x08\x00" + pkt
-                if tls_dump:
-                    describe_tls(frame, "net->calc")
-                if watch:
-                    watch.observe(frame, outbound=False)
-                write_frame(fd, frame)
+                if frame[12:14] == b"\x08\x00":
+                    if tls_dump:
+                        describe_tls(frame, "net->calc")
+                    if watch:
+                        watch.observe(frame, outbound=False)
+                link.write_frame(frame)
                 rx += 1
                 if verbose:
                     print(f"  in  {describe_frame(frame)}")
@@ -1281,81 +1659,32 @@ def _cmd_bridge(fd: int, net: "MiniNet", uplink: str, seconds: float,
                 print(f"  out {tx}  in {rx}", end="\r", flush=True)
     except KeyboardInterrupt:
         print("\ninterrupted")
-    finally:
-        if anchor_loaded:
-            subprocess.run(["pfctl", "-a", anchor, "-F", "all"],
-                           capture_output=True)
-            print("pf        : NAT anchor flushed")
-        if pf_token is not None:
-            subprocess.run(["pfctl", "-X", pf_token], capture_output=True)
-            print("pf        : enable reference released")
-        tun.close()
 
     print(f"\nforwarded {tx} packets out, {rx} in")
     return 0
 
 
-def cmd_listen(fd: int, seconds: float) -> int:
-    asm = LengthPrefixReassembler()
-    total = 0
-    start = time.time()
-    try:
-        while time.time() - start < seconds:
-            try:
-                chunk = os.read(fd, 4096)
-            except BlockingIOError:
-                time.sleep(0.01)
-                continue
-            if not chunk:
-                time.sleep(0.01)
-                continue
-            total += len(chunk)
-            for frame in asm.feed(chunk):
-                print("  " + describe_frame(frame))
-    except KeyboardInterrupt:
-        print("\ninterrupted")
-    print(f"\nbytes {total}  frames {asm.frames}  "
-          f"resync {asm.resync_bytes}  buffered {len(asm.buf)}")
-    if asm.frames and not asm.resync_bytes:
-        print("Clean: every byte accounted for.")
-    elif asm.resync_bytes:
-        print(f"{asm.resync_bytes} bytes needed resync -- reassembly imperfect "
-              "on this traffic.")
-    return 0
+def open_link(args, system: str):
+    """Wait for the calculator, then open it the platform's way."""
+    if system == "Darwin":
+        port = wait_for_calculator(args.port, quiet=args.quiet)
+        link = TtyLink(port)
+        print(f"port: {port}  (DTR asserted)")
+        return link
+    import usb.core
 
-
-def cmd_serve(fd: int, seconds: float, net: MiniNet,
-              crypto: "CryptoResponder | None" = None) -> int:
-    asm = LengthPrefixReassembler()
-    start = time.time()
-    print(f"serving: host {'.'.join(str(b) for b in net.host_ip)}, "
-          f"offering {'.'.join(str(b) for b in net.client_ip)}\n")
+    dev = wait_for(find_calculator_usb,
+                   f"the calculator ({VID:04X}:{PID:04X})", args.quiet)
     try:
-        while seconds <= 0 or time.time() - start < seconds:
-            try:
-                chunk = os.read(fd, 4096)
-            except BlockingIOError:
-                time.sleep(0.01)
-                continue
-            if not chunk:
-                time.sleep(0.01)
-                continue
-            for frame in asm.feed(chunk):
-                print("  rx " + describe_frame(frame))
-                reply = crypto.handle(frame, net.host_mac) if crypto else None
-                if reply is None:
-                    reply = net.handle(frame)
-                if reply:
-                    write_frame(fd, reply)
-                    print("  tx " + describe_frame(reply))
-    except KeyboardInterrupt:
-        print("\ninterrupted")
-    if net.leased_to:
-        print(f"\nLeased {'.'.join(str(b) for b in net.client_ip)} to "
-              f"{mac_str(net.leased_to)} -- the link works end to end.")
-    else:
-        print("\nNo lease completed.")
-    return 0
+        link = UsbLink(dev)
+    except usb.core.USBError as e:
+        if e.errno == 13:                                  # EACCES
+            raise RuntimeError(
+                "no permission to open the calculator's USB device; run as "
+                "root, or install the udev rule from --print-setup") from None
+        raise
+    print(f"device: {link.name}  (DTR asserted)")
+    return link
 
 
 def main() -> int:
@@ -1365,8 +1694,15 @@ def main() -> int:
                     help="outbound interface to NAT through "
                          "(default: whichever carries the host's default route)")
     ap.add_argument("--port",
-                    help="serial port "
+                    help="macOS: serial port "
                          f"(default: auto-detect VID={VID:04X}:{PID:04X})")
+    ap.add_argument("--tap", metavar="IFACE",
+                    help="Linux: TAP interface to use. If it exists it is "
+                         "used as configured (no root needed if you own it); "
+                         f"otherwise it is created (default name {TAP_PREFIX}N)")
+    ap.add_argument("--print-setup", action="store_true",
+                    help="Linux: print the one-time root commands for "
+                         "running unprivileged, then exit")
     ap.add_argument("--seconds", type=float, default=0.0,
                     help="how long to run; 0 means until interrupted (default)")
     ap.add_argument("--once", action="store_true",
@@ -1390,65 +1726,99 @@ def main() -> int:
                     help="NTP server to advertise via DHCP (default 162.159.200.1)")
     args = ap.parse_args()
 
+    system = platform.system()
+    if system not in ("Darwin", "Linux"):
+        print("this bridge supports macOS (utun + PF) and Linux "
+              "(libusb + TAP + nftables)", file=sys.stderr)
+        return 2
+    if system == "Darwin" and (args.tap or args.print_setup):
+        ap.error("--tap and --print-setup are for Linux")
+    if system == "Linux" and args.port:
+        ap.error("--port is for macOS; on Linux the calculator is opened "
+                 "over libusb")
+
+    candidates = active_uplinks()
+    if args.print_setup:
+        TapHost.print_setup(args, args.odevice or (candidates[0] if candidates else None))
+        return 0
+
     try:
         crypto = CryptoResponder() if args.accelerate_crypto else None
     except ImportError as e:
         ap.error(f"--accelerate-crypto needs python3-cryptography: {e}")
 
-    if platform.system() != "Darwin":
-        print("this bridge currently requires macOS (utun and pfctl)",
-              file=sys.stderr)
-        return 2
-
-    if os.geteuid() != 0:
+    if system == "Darwin" and os.geteuid() != 0:
         print("needs root (creates a utun interface and loads a pf NAT rule)\n"
               "Re-run with sudo.", file=sys.stderr)
         return 2
+    if system == "Linux":
+        try:
+            import usb.core
+            import usb.backend.libusb1
+        except ImportError:
+            print("needs pyusb: dnf install python3-pyusb "
+                  "(or pip install pyusb)", file=sys.stderr)
+            return 2
+        if usb.backend.libusb1.get_backend() is None:
+            print("pyusb cannot find libusb-1.0: dnf install libusb1",
+                  file=sys.stderr)
+            return 2
 
-    candidates = active_uplinks()
-    if not candidates:
+    preconfigured = (system == "Linux" and args.tap
+                     and os.path.exists(f"/sys/class/net/{args.tap}"))
+    uplink = args.odevice or (candidates[0] if candidates else None)
+    if not uplink and not preconfigured:
         print("no active network interface found", file=sys.stderr)
         return 2
-    uplink = args.odevice or candidates[0]
-    if args.odevice and args.odevice not in candidates:
-        print(f"warning: {args.odevice} not among active interfaces {candidates}",
-              file=sys.stderr)
-    elif not args.odevice and len(candidates) > 1:
-        print(f"outbound : {uplink} (also available: "
-              f"{', '.join(candidates[1:])}; pick with --odevice)")
+    if not preconfigured:
+        if args.odevice and args.odevice not in candidates:
+            print(f"warning: {args.odevice} not among active interfaces "
+                  f"{candidates}", file=sys.stderr)
+        elif not args.odevice and len(candidates) > 1:
+            print(f"outbound : {uplink} (also available: "
+                  f"{', '.join(candidates[1:])}; pick with --odevice)")
 
     net = MiniNet(args.host_ip, args.client_ip, dns_ip=args.dns, ntp_ip=args.ntp)
-    # The kernel handles ICMP and TCP once the utun is up.
-    net.answer_icmp = net.answer_tcp = False
+    # On Linux the kernel also answers ARP, since the TAP interface is
+    # Ethernet.
+    if system == "Linux":
+        net.answer_arp = False
 
     try:
         while True:
-            port = wait_for_calculator(args.port)
-            fd = open_tty(port)
-            print(f"port: {port}  (DTR asserted)")
             try:
-                cmd_bridge(fd, net, uplink, args.seconds,
-                           verbose=not args.quiet,
-                           tls_dump=args.tls or args.debug or bool(args.save_hello),
-                           watch=ConnectionWatch(trace=args.debug) if args.debug else None,
-                           crypto=crypto, save_hello=args.save_hello)
+                link = open_link(args, system)
+            except RuntimeError as e:
+                print(f"\n{e}", file=sys.stderr)
+                return 2
+            try:
+                host = (UtunHost(net, uplink) if system == "Darwin"
+                        else TapHost(net, uplink, args.tap))
+                with host:
+                    run_bridge(link, net, host, args.seconds,
+                               verbose=not args.quiet,
+                               tls_dump=args.tls or args.debug or bool(args.save_hello),
+                               watch=ConnectionWatch(trace=args.debug) if args.debug else None,
+                               crypto=crypto, save_hello=args.save_hello)
+            except RuntimeError as e:
+                print(f"\n{e}", file=sys.stderr)
+                return 2
+            except subprocess.CalledProcessError as e:
+                detail = (e.stderr or "").strip()
+                print(f"\n`{' '.join(e.cmd)}` failed (exit {e.returncode})"
+                      f"{': ' + detail if detail else ''}", file=sys.stderr)
+                return 2
             except BlockingIOError as e:
                 print(f"\nbridge I/O would block: {e}", file=sys.stderr)
                 return 2
             except OSError as e:
-                print(f"\ndevice went away ({e.strerror}); waiting for it "
-                      f"to come back")
+                print(f"\ndevice went away ({e.strerror or e}); waiting for "
+                      f"it to come back")
             except SerialFrameWriteError as e:
                 print(f"\nserial frame write failed: {e}", file=sys.stderr)
                 return 2
-            except MissingP256LengthHint as e:
-                print(f"\n{e}", file=sys.stderr)
-                return 2
             finally:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                link.close()
             if args.seconds > 0 or args.once:
                 return 0
     except KeyboardInterrupt:
