@@ -122,8 +122,38 @@ typedef enum lwip_event_kind
     LWIP_EV_IO_ETH,       /* network bytes rx/tx; data.eth                   */
     LWIP_EV_POWER,        /* USB/calc power state change; data.power         */
     /* Appended to preserve existing event-kind values. */
-    LWIP_EV_ERROR_MSG     /* named error detail; data.msg                    */
+    LWIP_EV_ERROR_MSG,    /* named error detail; data.msg                    */
+    LWIP_EV_TCP_RETRY,    /* TCP segment retransmitted (WARN level); data.tcp */
+    LWIP_EV_TCP_GIVEUP    /* TCP connection abandoned after retries (ERROR level); data.tcp */
 } lwip_event_kind_t;
+
+/** Why a TCP retry/give-up event was emitted (data.tcp.reason). */
+typedef enum lwip_tcp_retry_reason
+{
+    LWIP_TCP_RETRY_RTO = 0,     /* retransmission timer expired            */
+    LWIP_TCP_RETRY_FAST,        /* fast retransmit after duplicate ACKs    */
+    LWIP_TCP_GIVEUP_SYN,        /* SYN unanswered after TCP_SYNMAXRTX      */
+    LWIP_TCP_GIVEUP_DATA,       /* data unacknowledged after TCP_MAXRTX    */
+    LWIP_TCP_GIVEUP_PERSIST,    /* zero-window probes unanswered           */
+    LWIP_TCP_GIVEUP_KEEPALIVE   /* keepalive probes unanswered             */
+} lwip_tcp_retry_reason_t;
+
+/**
+ * TCP retry/give-up detail. seq/len/flags describe the segment being
+ * retransmitted (or, on give-up, the oldest one still outstanding), so the
+ * event can be matched to a frame in a packet capture: same ports, same
+ * sequence number, same payload length.
+ */
+struct lwip_event_tcp
+{
+    uint32_t seq;          /* sequence number, host order                 */
+    uint16_t len;          /* TCP payload length of that segment          */
+    uint16_t local_port;
+    uint16_t remote_port;
+    uint8_t  flags;        /* TCP header flags (FIN 0x01 SYN 0x02 RST 0x04 PSH 0x08 ACK 0x10) */
+    uint8_t  count;        /* retransmissions so far (probes, for PERSIST/KEEPALIVE) */
+    uint8_t  reason;       /* lwip_tcp_retry_reason_t                     */
+};
 
 /**
  * User-configurable verbosity gate. Each level admits itself and every level
@@ -533,7 +563,7 @@ typedef enum lwip_error_id
     LWIP_E0114 = 0x0114, // conn_tcp_connected_cb(): fails. Trigger: `err != ERR_OK` @transport:50
     LWIP_E0115 = 0x0115, // lwip_socket_create_ex(): fails. Trigger: `lwip_socket_rx_ring_create(conn) != LWIP_OK` @memory:70 @transport:35
     LWIP_E0116 = 0x0116, // lwip_socket_create_ex(): fails. @transport:50
-    LWIP_E0117 = 0x0117, // conn_dns_found_cb(): fails. Trigger: `!ipaddr` @api:75 @dns:60 @transport:20
+    LWIP_E0117 = 0x0117, // conn_dns_found_cb(): DNS lookup failed: the resolver gave up (timeout after retries, or NXDOMAIN) and reported no address. Trigger: `!ipaddr` @dns:80 @transport:20
     LWIP_E0118 = 0x0118, // conn_dns_found_cb(): fails. Trigger: `err != ERR_OK` @dns:60 @transport:50
     LWIP_E0119 = 0x0119, // lwip_socket_connect_now(): IPv4 / IPv6 literal short-circuits DNS. Trigger: `err != ERR_OK` @transport:50
     LWIP_E011A = 0x011A, // lwip_socket_connect_now(): fails. Trigger: `err != ERR_OK` @transport:50
@@ -1037,7 +1067,13 @@ typedef enum lwip_error_id
     LWIP_E030C = 0x030C, // tls_x509_signature_algorithm(): fails and returns false. Trigger: `(seen & 7) != 7` @cert:70
     LWIP_E030D = 0x030D, // tls_x509_signature_algorithm(): fails and returns false. Trigger: `!tls_asn1_next(&c, &param) || (scheme == TLS_ALG_RSA_PKCS1_SHA256 && (param.tag != ASN1_NULL || param.len)) || scheme == TLS_ALG_ECDSA_SECP256R1_SHA256 || sche…` @cert:70
     LWIP_E030E = 0x030E, // tls_x509_signature_algorithm(): fails and returns false. Trigger: `c.cur != c.end` @cert:70
-    LWIP_E030F = 0x030F, // lwip_log_file_start(): the previous logging session never reached lwip_log_file_stop(), so it ended in a crash/NMI reset or RAM clear (its last log lines were lost with RAM), or the program exited or the calculator powered off without stopping the log. Trigger: `session-open flag still set in lwIPLgMD` @crash:50
+    LWIP_E030F = 0x030F, // lwip_log_file_start(): the previous logging session never reached lwip_log_file_stop(), so it ended in a crash/NMI reset or RAM clear (its last log lines were lost with RAM), or the program exited or the calculator powered off without stopping the log. Trigger: `session-open flag still set in lwIPLgMD` @crash:40
+    LWIP_E0310 = 0x0310, // tcp_slowtmr(): gave up connecting: the SYN went unanswered after TCP_SYNMAXRTX retransmissions (server down, port filtered, or no route). Logged as `tcp give-up syn`. Trigger: `pcb->state == SYN_SENT && pcb->nrtx >= TCP_SYNMAXRTX` @wire:60 @transport:50
+    LWIP_E0311 = 0x0311, // tcp_slowtmr(): gave up on an established connection: data went unacknowledged after TCP_MAXRTX retransmissions (path lost or peer vanished). Logged as `tcp give-up data`. Trigger: `pcb->nrtx >= TCP_MAXRTX` @wire:60 @transport:50
+    LWIP_E0312 = 0x0312, // tcp_slowtmr(): gave up after TCP_MAXRTX zero-window probes: the peer kept its receive window closed or stopped answering. Logged as `tcp give-up persist`. Trigger: `pcb->persist_probe >= TCP_MAXRTX` @peer:50 @wire:40
+    LWIP_E0313 = 0x0313, // tcp_slowtmr(): retransmission timer expired, segment resent (`tcp retry rto #n`; seq/len/ports identify it in a capture). One retry is normal on a lossy link; many point at the path. Trigger: `pcb->rtime >= pcb->rto` @wire:25 @transport:15
+    LWIP_E0314 = 0x0314, // tcp_slowtmr(): keepalive probes went unanswered, connection aborted (peer or path vanished while idle). Logged as `tcp give-up keepalive`. Trigger: `idle > keep_idle + TCP_KEEP_DUR(pcb)` @wire:50 @peer:30
+    LWIP_E0315 = 0x0315, // tcp_rexmit_fast(): fast retransmit after duplicate ACKs: the peer reported a missing segment (`tcp retry fast #n`). Indicates packet loss. Trigger: `three duplicate ACKs` @wire:20
     /* error-ids:end */
 } lwip_error_id_t;
 
@@ -1056,7 +1092,7 @@ struct lwip_event
 {
     uint8_t module;  /* lwip_debug_module_t */
     uint8_t kind;    /* lwip_event_kind_t   */
-    uint16_t eid;    /* lwip_error_id_t for WARN / ERROR / ERROR_MSG, else 0 */
+    uint16_t eid;    /* lwip_error_id_t for WARN / ERROR / ERROR_MSG / TCP_*, else 0 */
     union
     {
         const char *msg;        /* INFO / ERROR_MSG: message           */
@@ -1086,6 +1122,7 @@ struct lwip_event
             uint8_t subtype;      /* lwip_power_event_t                  */
             uint8_t charging;     /* boot_BatteryCharging() != 0         */
         } power;                 /* POWER                                */
+        struct lwip_event_tcp tcp; /* TCP_RETRY / TCP_GIVEUP             */
     } data;
 };
 
@@ -1172,6 +1209,7 @@ void lwip_event_emit_state(uint8_t module, void *owner, uint16_t change_event);
 void lwip_event_emit_io_file(uint8_t module, uint8_t dir, const char *name, uint32_t bytes);
 void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes);
 void lwip_event_emit_power(uint8_t module, uint8_t subtype, uint8_t charging);
+void lwip_event_emit_tcp(uint8_t module, uint8_t kind, uint16_t eid, const struct lwip_event_tcp *tcp);
 void lwip_traceback_push_socket(uint16_t component, uint16_t operation,
                                 int raw_error, uint16_t mapped_error,
                                 uint16_t status);

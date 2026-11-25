@@ -81,6 +81,16 @@ void             tcp_free    (struct tcp_pcb *pcb);
 void             tcp_abandon (struct tcp_pcb *pcb, int reset);
 err_t            tcp_send_empty_ack(struct tcp_pcb *pcb);
 err_t            tcp_rexmit  (struct tcp_pcb *pcb);
+/* lwIP-CE: TCP retry/give-up logging (see lwip/logging.h, LWIP_EV_TCP_*).
+ * The first argument is an error ID, assigned by tools/error_ids/error_ids.py.
+ * seg may be NULL: the oldest outstanding segment is reported. */
+void tcp_log_retry_event(u16_t eid, u8_t giveup, u8_t reason,
+                         const struct tcp_pcb *pcb, const struct tcp_seg *seg);
+#define TCP_RETRY_WARN(eid, reason, pcb, seg) \
+  tcp_log_retry_event((u16_t)(eid), 0, (u8_t)(reason), (pcb), (seg))
+#define TCP_GIVEUP_ERROR(eid, reason, pcb) \
+  tcp_log_retry_event((u16_t)(eid), 1, (u8_t)(reason), (pcb), NULL)
+
 err_t            tcp_rexmit_rto_prepare(struct tcp_pcb *pcb);
 void             tcp_rexmit_rto_commit(struct tcp_pcb *pcb);
 void             tcp_rexmit_rto  (struct tcp_pcb *pcb);

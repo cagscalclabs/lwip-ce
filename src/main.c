@@ -14,6 +14,7 @@
 #include "lwip/mem.h"
 #include "drivers/pcap.h"
 #include "drivers/pcap_decode.h"
+#include "drivers/pcap_record.h"
 #include "drivers/mem.h"
 #include "lwip-imports.h"
 #include "lwIP.h"
@@ -150,8 +151,12 @@ static void pcap_detail(const struct pcap *hdr)
     int scroll = 0;
     char title[32];
 
-    snprintf(title, sizeof title, "%c%c%u %s, %u bytes", hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
-             hdr->direction == PCAP_DIR_TX ? "sent" : "received", hdr->len);
+    uint32_t ts_sec;
+    int n = snprintf(title, sizeof title, "%c%c%u %s, %u bytes", hdr->ifname[0], hdr->ifname[1], hdr->ifnum,
+                     hdr->direction == PCAP_DIR_TX ? "sent" : "received", hdr->len);
+    if (n > 0 && (size_t)n < sizeof title && pcap_ts_unpack(pcap_rec_ts((const uint8_t *)hdr), &ts_sec, NULL))
+        snprintf(title + n, sizeof title - (size_t)n, " %02u:%02u:%02u", (unsigned)(ts_sec / 3600),
+                 (unsigned)(ts_sec / 60 % 60), (unsigned)(ts_sec % 60));
 
     for (;;)
     {

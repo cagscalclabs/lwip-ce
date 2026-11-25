@@ -67,6 +67,8 @@ SITE_MACROS = {
     "ALTCP_WS_ERROR_ABORT_CODE": "ERR",
     "ALTCP_TLS_CE_ERROR_ABORT": "ERR",
     "ALTCP_TLS_CE_ERROR_ABORT_CODE": "ERR",
+    "TCP_RETRY_WARN": "WARN",
+    "TCP_GIVEUP_ERROR": "ERR",
 }
 
 ID_RE = re.compile(r"^LWIP_E([0-9A-F]{4})$")
@@ -435,6 +437,8 @@ FILE_CATEGORY = [
     ("apps/altcp_ws/", "ws", 60),
     ("core/dns.c", "dns", 70),
     ("core/udp.c", "transport", 50),
+    ("core/tcp", "transport", 50),
+    ("core/altcp", "transport", 50),
     ("core/ipv4/", "wire", 50),
     ("netif/", "wire", 50),
     ("drivers/usb_ethernet.c", "usb", 70),
@@ -559,7 +563,10 @@ def draft_tags(site: Site, src: str, code: str, desc: str) -> str:
         return render_tags(tags, site, propagate=True)
 
     alloc = ALLOC_TEXT.search(desc) or alloc_checked_var(terms, code, site.name_pos)
-    param = is_param_check(terms, function_params(code, site.name_pos))
+    # A callback's parameters come from the stack, not the application:
+    # conn_dns_found_cb(ipaddr == NULL) means the lookup failed.
+    is_callback = re.search(r"(_cb|_callback|_fn)$", func) is not None
+    param = not is_callback and is_param_check(terms, function_params(code, site.name_pos))
     callees = None if (alloc or param) else failed_calls(terms)
 
     if callees:

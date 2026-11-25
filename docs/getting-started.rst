@@ -249,7 +249,8 @@ optional runtime data. Names are shown with their exact spelling below.
        saved.
    * - ``lwIPPCAP``
      - Packet capture is enabled and the first captured records are flushed.
-     - Packet records from all capturing interfaces. The file grows only to the
+     - Packet records from all capturing interfaces, each stamped with the
+       calculator's time of day (the same clock as log lines). The file grows only to the
        configured 4, 8, 16, or 32 KiB limit, after which capture stops. It can
        be viewed and deleted from the configuration application.
    * - ``lwIPLog``

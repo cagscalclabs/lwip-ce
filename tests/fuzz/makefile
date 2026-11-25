@@ -2,7 +2,7 @@ CC = clang
 FUZZ_SECONDS ?= 60
 CFLAGS = -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
 	-Duint24_t=uint32_t -Dint24_t=int32_t -Ishim -I../../src/include -I../../src -I../../src/tls/includes
-TARGETS = json xml url base64 asn1 pcap x509 ws tls
+TARGETS = json xml url base64 asn1 pcap pcap_record x509 ws tls
 SRC = ../../src
 
 json_SRC = parser_stubs.c $(SRC)/parsers/json.c
@@ -11,6 +11,7 @@ url_SRC = $(SRC)/parsers/url.c
 base64_SRC = $(SRC)/tls/core/base64.c
 asn1_SRC = $(SRC)/tls/core/asn1.c
 pcap_SRC =
+pcap_record_SRC =
 ws_SRC =
 x509_SRC = x509_stubs.c $(SRC)/tls/core/x509.c $(SRC)/tls/core/asn1.c $(SRC)/tls/core/base64.c
 

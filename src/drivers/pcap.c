@@ -8,7 +8,18 @@
 #include "usb_ethernet.h"
 #include "mem.h"
 #include "pcap.h"
+#include "pcap_record.h"
+#include "lwip/sys.h"
 #include "../lwip-imports.h"
+
+#include <sys/rtc.h>
+
+_Static_assert(sizeof(struct pcap) == PCAP_REC_HDR_LEN, "struct pcap must match pcap_record.h");
+_Static_assert(offsetof(struct pcap, ts) == PCAP_REC_OFF_TS, "pcap ts offset");
+_Static_assert(offsetof(struct pcap, ifname) == PCAP_REC_OFF_IFNAME, "pcap ifname offset");
+_Static_assert(offsetof(struct pcap, ifnum) == PCAP_REC_OFF_IFNUM, "pcap ifnum offset");
+_Static_assert(offsetof(struct pcap, direction) == PCAP_REC_OFF_DIR, "pcap direction offset");
+_Static_assert(offsetof(struct pcap, len) == PCAP_REC_OFF_LEN, "pcap len offset");
 
 /* Flush staged records to the appvar every 5 seconds so data isn't lost if
  * the application exits without going through orderly netif teardown. */
@@ -107,17 +118,30 @@ static void pcap_disable_netif(struct netif *netif)
 static size_t pcap_prefix_within_limit(const uint8_t *src, size_t nbytes,
                                        size_t remaining)
 {
-    size_t offset = 0;
-    while (offset + sizeof(struct pcap) <= nbytes)
-    {
-        struct pcap record;
-        memcpy(&record, src + offset, sizeof(record));
-        size_t record_size = sizeof(record) + record.len;
-        if (record_size > nbytes - offset || record_size > remaining - offset)
-            break;
-        offset += record_size;
-    }
+    size_t offset = 0, next = 0;
+    while (pcap_record_next(src, nbytes, &next, NULL, NULL, NULL) && next <= remaining)
+        offset = next;
     return offset;
+}
+
+/* Packed time of day for a new record (format in pcap_record.h). The RTC has
+ * whole seconds; the fraction is sys_now() time since the first frame seen in
+ * the current RTC second, so frames within a second stay ordered and spaced. */
+static uint32_t pcap_timestamp(void)
+{
+    static uint32_t cur_sec = UINT32_MAX;
+    static u32_t sec_anchor_ms;
+    uint32_t sec = (uint32_t)rtc_Time() % PCAP_TS_SECS_PER_DAY;
+    u32_t now = sys_now();
+    if (sec != cur_sec)
+    {
+        cur_sec = sec;
+        sec_anchor_ms = now;
+    }
+    u32_t ms = now - sec_anchor_ms;
+    if (ms > 999u)
+        ms = 999u;
+    return pcap_ts_pack(sec, (uint32_t)(ms * PCAP_TS_FRAC_PER_SEC / 1000u));
 }
 
 /* Append complete records from `src` to the capture AppVar without crossing
@@ -288,6 +312,7 @@ bool pcap_write(struct netif *netif, pcap_direction_t dir, const uint8_t *data, 
     rec.ifnum     = netif->num;
     rec.direction = (uint8_t)(unsigned int)dir;
     rec.len       = len;
+    pcap_rec_set_ts((uint8_t *)&rec, pcap_timestamp());
 
     uint8_t *dest = eth->pcap.buf + eth->pcap.offset;
     memcpy(dest, &rec, sizeof(struct pcap));
@@ -354,16 +379,14 @@ bool pcap_read_next(struct pcap_reader_ctx *ctx, struct pcap **hdr, const uint8_
 
     uint16_t total = file_fn.ti_getsize(ctx->handle);
     uint8_t *base = (uint8_t *)file_fn.ti_getdataptr(ctx->handle);
+    const uint8_t *h;
+    size_t next = ctx->offset;
 
-    while (ctx->offset + sizeof(struct pcap) <= total)
+    /* pcap_record_next stops at a record whose frame would overrun the appvar. */
+    while (pcap_record_next(base, total, &next, &h, NULL, NULL))
     {
-        struct pcap *rec = (struct pcap *)(base + ctx->offset);
-
-        /* Bounds check: ensure the frame data fits within the appvar. */
-        if (ctx->offset + sizeof(struct pcap) + rec->len > total)
-            return false;
-
-        ctx->offset += sizeof(struct pcap) + rec->len;
+        struct pcap *rec = (struct pcap *)h;
+        ctx->offset = next;
 
         /* Apply filter: skip if ifnum_filter is set and doesn't match. */
         if (ctx->ifnum_filter != 0xFF)

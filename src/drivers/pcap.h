@@ -41,9 +41,13 @@ struct pcap_if
     size_t offset;
 };
 
+/* One capture record header; the frame bytes follow. On-disk layout,
+ * timestamp encoding, and a bounds-checked walker are in pcap_record.h. */
 struct pcap
 {
-    struct netif *netif;
+    /* Packed time of day (pcap_record.h: pcap_rec_ts / pcap_ts_unpack);
+     * 0 = no timestamp. Was a struct netif pointer (always zero on disk). */
+    uint8_t ts[3];
     char ifname[2];
     uint8_t ifnum;
     uint8_t direction;

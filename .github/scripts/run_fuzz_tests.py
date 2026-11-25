@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-TARGETS = ("json", "xml", "url", "base64", "asn1", "pcap", "x509", "ws", "tls")
+TARGETS = ("json", "xml", "url", "base64", "asn1", "pcap", "pcap_record", "x509", "ws", "tls")
 STAT_PATTERN = re.compile(r"^stat::([a-zA-Z0-9_]+):\s*(.*?)\s*$", re.MULTILINE)
 
 

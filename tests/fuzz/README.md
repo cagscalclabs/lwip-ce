@@ -10,6 +10,7 @@ SDK headers and `x509_stubs.c` stands in for the assembly crypto.
 | `base64`, `asn1` | `src/tls/core/base64.c`, `asn1.c` |
 | `x509` | `src/tls/core/x509.c`: DER/PEM import, SAN/CN matching, validity, path extensions |
 | `pcap` | `src/drivers/pcap_decode.h` |
+| `pcap_record` | `src/drivers/pcap_record.h`: lwIPPCAP record walker and timestamps, then `pcap_decode.h` on each frame |
 | `ws` | `src/apps/altcp_ws/altcp_ws.c` upgrade response and frame parser, chunked input |
 | `tls` | `src/tls/core/handshake.c`: EncryptedExtensions, CertificateRequest, streamed Certificate walker and chain jobs |
 

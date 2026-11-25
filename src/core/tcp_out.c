@@ -1789,6 +1789,7 @@ tcp_rexmit_fast(struct tcp_pcb *pcb)
   LWIP_ASSERT("tcp_rexmit_fast: invalid pcb", pcb != NULL);
 
   if (pcb->unacked != NULL && !(pcb->flags & TF_INFR)) {
+    struct tcp_seg *rexmit_seg = pcb->unacked; /* lwIP-CE: for the log */
     /* This is fast retransmit. Retransmit the first unacked segment. */
     LWIP_DEBUGF(TCP_FR_DEBUG,
                 ("tcp_receive: dupacks %"U16_F" (%"U32_F
@@ -1814,6 +1815,7 @@ tcp_rexmit_fast(struct tcp_pcb *pcb)
 
       /* Reset the retransmission timer to prevent immediate rto retransmissions */
       pcb->rtime = 0;
+      TCP_RETRY_WARN(LWIP_E0315, LWIP_TCP_RETRY_FAST, pcb, rexmit_seg);
     }
   }
 }

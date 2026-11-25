@@ -107,6 +107,7 @@
 #include "lwip/tcp.h"
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/debug.h"
+#include "lwip/logging.h"
 #include "lwip/stats.h"
 #include "lwip/ip6.h"
 #include "lwip/ip6_addr.h"
@@ -1231,9 +1232,11 @@ tcp_slowtmr_start:
 
     if (pcb->state == SYN_SENT && pcb->nrtx >= TCP_SYNMAXRTX) {
       ++pcb_remove;
+      TCP_GIVEUP_ERROR(LWIP_E0310, LWIP_TCP_GIVEUP_SYN, pcb);
       LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: max SYN retries reached\n"));
     } else if (pcb->nrtx >= TCP_MAXRTX) {
       ++pcb_remove;
+      TCP_GIVEUP_ERROR(LWIP_E0311, LWIP_TCP_GIVEUP_DATA, pcb);
       LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: max DATA retries reached\n"));
     } else {
       if (pcb->persist_backoff > 0) {
@@ -1241,6 +1244,7 @@ tcp_slowtmr_start:
         LWIP_ASSERT("tcp_slowtimr: persist ticking with empty send buffer", pcb->unsent != NULL);
         if (pcb->persist_probe >= TCP_MAXRTX) {
           ++pcb_remove; /* max probes reached */
+          TCP_GIVEUP_ERROR(LWIP_E0312, LWIP_TCP_GIVEUP_PERSIST, pcb);
         } else {
           u8_t backoff_cnt = tcp_persist_backoff[pcb->persist_backoff - 1];
           if (pcb->persist_cnt < backoff_cnt) {
@@ -1277,6 +1281,9 @@ tcp_slowtmr_start:
         }
 
         if (pcb->rtime >= pcb->rto) {
+          /* lwIP-CE: remember the segment being retransmitted for the log;
+           * prepare/commit move it between queues but don't free it. */
+          struct tcp_seg *rexmit_seg = pcb->unacked ? pcb->unacked : pcb->unsent;
           /* Time for a retransmission. */
           LWIP_DEBUGF(TCP_RTO_DEBUG, ("tcp_slowtmr: rtime %"S16_F
                                       " pcb->rto %"S16_F"\n",
@@ -1311,6 +1318,7 @@ tcp_slowtmr_start:
             /* The following needs to be called AFTER cwnd is set to one
                mss - STJ */
             tcp_rexmit_rto_commit(pcb);
+            TCP_RETRY_WARN(LWIP_E0313, LWIP_TCP_RETRY_RTO, pcb, rexmit_seg);
           }
         }
       }
@@ -1335,6 +1343,7 @@ tcp_slowtmr_start:
          (pcb->state == CLOSE_WAIT))) {
       if ((u32_t)(tcp_ticks - pcb->tmr) >
           (pcb->keep_idle + TCP_KEEP_DUR(pcb)) / TCP_SLOW_INTERVAL) {
+        TCP_GIVEUP_ERROR(LWIP_E0314, LWIP_TCP_GIVEUP_KEEPALIVE, pcb);
         LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: KEEPALIVE timeout. Aborting connection to "));
         ip_addr_debug_print_val(TCP_DEBUG, pcb->remote_ip);
         LWIP_DEBUGF(TCP_DEBUG, ("\n"));
@@ -2692,5 +2701,44 @@ tcp_ext_arg_invoke_callbacks_passive_open(struct tcp_pcb_listen *lpcb, struct tc
   return ERR_OK;
 }
 #endif /* LWIP_TCP_PCB_NUM_EXT_ARGS */
+
+/**
+ * lwIP-CE: log a TCP retransmission (WARN) or give-up (ERROR) with enough
+ * detail to find the segment in a packet capture. Called from tcp_slowtmr()
+ * and tcp_rexmit_fast() via TCP_RETRY_WARN / TCP_GIVEUP_ERROR.
+ */
+void
+tcp_log_retry_event(u16_t eid, u8_t giveup, u8_t reason,
+                    const struct tcp_pcb *pcb, const struct tcp_seg *seg)
+{
+  struct lwip_event_tcp t;
+
+  if (pcb == NULL) {
+    return;
+  }
+  if (seg == NULL) {
+    seg = pcb->unacked != NULL ? pcb->unacked : pcb->unsent;
+  }
+  t.reason      = reason;
+  t.local_port  = pcb->local_port;
+  t.remote_port = pcb->remote_port;
+  switch (reason) {
+    case LWIP_TCP_GIVEUP_PERSIST:   t.count = pcb->persist_probe; break;
+#if LWIP_TCP_KEEPALIVE
+    case LWIP_TCP_GIVEUP_KEEPALIVE: t.count = pcb->keep_cnt_sent; break;
+#endif
+    default:                        t.count = pcb->nrtx; break;
+  }
+  if (seg != NULL && seg->tcphdr != NULL) {
+    t.seq   = lwip_ntohl(seg->tcphdr->seqno);
+    t.len   = seg->len;
+    t.flags = (u8_t)TCPH_FLAGS(seg->tcphdr);
+  } else {
+    t.seq   = pcb->snd_nxt;
+    t.len   = 0;
+    t.flags = 0;
+  }
+  lwip_event_emit_tcp(LWIP_DBG_MOD_LWIP, giveup ? LWIP_EV_TCP_GIVEUP : LWIP_EV_TCP_RETRY, eid, &t);
+}
 
 #endif /* LWIP_TCP */

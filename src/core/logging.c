@@ -89,7 +89,9 @@ static lwip_log_verbosity_t kind_min_verbosity(uint8_t kind)
     switch ((lwip_event_kind_t)kind)
     {
     case LWIP_EV_ERROR_MSG:
+    case LWIP_EV_TCP_GIVEUP:
     case LWIP_EV_ERROR: return LWIP_LOG_VERBOSITY_ERROR;
+    case LWIP_EV_TCP_RETRY:
     case LWIP_EV_WARN:  return LWIP_LOG_VERBOSITY_WARNING;
     case LWIP_EV_INFO:  return LWIP_LOG_VERBOSITY_INFO;
     default:            return LWIP_LOG_VERBOSITY_DEBUG; /* DEBUG, STATE_CHG, IO_*, POWER */
@@ -281,6 +283,20 @@ void lwip_event_emit_io_eth(uint8_t module, uint8_t dir, uint32_t bytes)
     ev.kind = LWIP_EV_IO_ETH;
     ev.data.eth.dir = dir;
     ev.data.eth.bytes = bytes;
+    g_event_fn(&ev);
+}
+
+void lwip_event_emit_tcp(uint8_t module, uint8_t kind, uint16_t eid, const struct lwip_event_tcp *tcp)
+{
+    if (!g_event_fn || !tcp || !kind_admitted(kind))
+    {
+        return;
+    }
+    struct lwip_event ev;
+    ev.module = module;
+    ev.kind = kind;
+    ev.eid = eid;
+    ev.data.tcp = *tcp;
     g_event_fn(&ev);
 }
 

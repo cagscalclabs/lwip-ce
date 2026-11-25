@@ -19,6 +19,8 @@
  *   <ts>: TBK: [e<id_hex4> ]<module> <file>:<line> [x<extra_hex>]\n
  *   <ts>: EVT: ERR: [e<id_hex4> ]<module> <message>\n
  *   <ts>: EVT: <kind> <module> [<detail>]\n
+ *   <ts>: EVT: WARN: e<id> <module> tcp retry <why> #<n> <lport>><rport> seq=<hex> len=<n> fl=<SAFPR>\n
+ *   <ts>: EVT: ERR: e<id> <module> tcp give-up <why> after <n> <lport>><rport> seq=<hex> len=<n> fl=<SAFPR>\n
  *
  * <ts> = rtc_Time() seconds (rolls at 86400).
  * TBK = traceback-class event (WARN or ERROR).
@@ -261,11 +263,40 @@ static const char *kind_str(uint8_t kind)
     case LWIP_EV_IO_FILE:   return "IOFILE";
     case LWIP_EV_IO_ETH:    return "IOETH";
     case LWIP_EV_POWER:     return "PWR";
+    case LWIP_EV_TCP_RETRY: return "WARN";
+    case LWIP_EV_TCP_GIVEUP: return "ERR";
     default:                return "?";
     }
 }
 
 static uint32_t log_ts(void) { return rtc_Time(); }
+
+static const char *tcp_reason_str(uint8_t reason)
+{
+    switch ((lwip_tcp_retry_reason_t)reason)
+    {
+    case LWIP_TCP_RETRY_RTO:        return "rto";
+    case LWIP_TCP_RETRY_FAST:       return "fast";
+    case LWIP_TCP_GIVEUP_SYN:       return "syn";
+    case LWIP_TCP_GIVEUP_DATA:      return "data";
+    case LWIP_TCP_GIVEUP_PERSIST:   return "persist";
+    case LWIP_TCP_GIVEUP_KEEPALIVE: return "keepalive";
+    default:                        return "?";
+    }
+}
+
+/* TCP flags as letters, Wireshark order: S(YN) A(CK) F(IN) P(SH) R(ST). */
+static void tcp_flags_str(uint8_t f, char out[6])
+{
+    char *o = out;
+    if (f & 0x02) *o++ = 'S';
+    if (f & 0x10) *o++ = 'A';
+    if (f & 0x01) *o++ = 'F';
+    if (f & 0x08) *o++ = 'P';
+    if (f & 0x04) *o++ = 'R';
+    if (o == out) *o++ = '-';
+    *o = '\0';
+}
 
 /* One formatted line at a time: the event callback stages its line before
  * log_dump_traceback() reuses the buffer. Static because the callback runs for
@@ -400,6 +431,22 @@ static void log_event_cb(const struct lwip_event *ev)
         n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: IOETH %s %s %lu\n",
                      (unsigned long)ts, mod, dir,
                      (unsigned long)ev->data.eth.bytes);
+        break;
+    }
+    case LWIP_EV_TCP_RETRY:
+    case LWIP_EV_TCP_GIVEUP:
+    {
+        const struct lwip_event_tcp *t = &ev->data.tcp;
+        char fl[6];
+        tcp_flags_str(t->flags, fl);
+        bool giveup = ev->kind == LWIP_EV_TCP_GIVEUP;
+        n = snprintf(line, LOG_LINE_MAX,
+                     "%lu: EVT: %s: e%04x %s tcp %s %s %s%u %u>%u seq=%08lx len=%u fl=%s\n",
+                     (unsigned long)ts, giveup ? "ERR" : "WARN", (unsigned)ev->eid, mod,
+                     giveup ? "give-up" : "retry", tcp_reason_str(t->reason),
+                     giveup ? "after " : "#", (unsigned)t->count,
+                     (unsigned)t->local_port, (unsigned)t->remote_port,
+                     (unsigned long)t->seq, (unsigned)t->len, fl);
         break;
     }
     case LWIP_EV_POWER:
