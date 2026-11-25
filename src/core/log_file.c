@@ -39,13 +39,20 @@
 #define LOG_STAGE_SIZE  (LOG_LINE_MAX * 3u)
 
 /* ---------------------------------------------------------------------------
- * Ring metadata layout in lwIPLgMD (3 bytes):
+ * Ring metadata layout in lwIPLgMD (4 bytes; archived, survives a RAM clear):
  *   [0] head        — index of the oldest archive slot
  *   [1] count       — number of occupied archive slots
  *   [2] max_slots   — saved copy of the user setting
+ *   [3] open        — 1 between lwip_log_file_start() and _stop(). Still set
+ *                     at the next start means the previous session never
+ *                     stopped: a crash/NMI reset, a RAM clear, or a program
+ *                     that exited without stopping the log. The active log
+ *                     lives in RAM, so that session's tail is lost; the flag
+ *                     is the only trace it leaves. Older 3-byte files read
+ *                     as open = 0.
  * ---------------------------------------------------------------------------
  */
-typedef struct { uint8_t head, count, max_slots; } log_ring_t;
+typedef struct { uint8_t head, count, max_slots, open; } log_ring_t;
 
 static uint8_t     *g_stage        = NULL;
 static size_t       g_stage_used   = 0;
@@ -60,13 +67,14 @@ static lwip_event_fn g_prev_cb     = NULL;
 static void ring_read(log_ring_t *r)
 {
     uint8_t h = file_fn.ti_open(LWIP_LOG_META_APPVAR, "r");
-    if (!h) { r->head = 0; r->count = 0; r->max_slots = g_max_slots; return; }
-    uint8_t buf[3] = {0};
-    file_fn.ti_read(buf, 1, 3, h);
+    if (!h) { r->head = 0; r->count = 0; r->max_slots = g_max_slots; r->open = 0; return; }
+    uint8_t buf[4] = {0};
+    file_fn.ti_read(buf, 1, 4, h);
     file_fn.ti_close(h);
     r->head      = buf[0];
     r->count     = buf[1];
     r->max_slots = buf[2] ? buf[2] : g_max_slots;
+    r->open      = buf[3] == 1;
 }
 
 static void ring_write(const log_ring_t *r)
@@ -74,9 +82,9 @@ static void ring_write(const log_ring_t *r)
     file_fn.ti_delete(LWIP_LOG_META_APPVAR);
     uint8_t h = file_fn.ti_open(LWIP_LOG_META_APPVAR, "w");
     if (!h) return;
-    uint8_t buf[3] = { r->head, r->count, r->max_slots };
-    file_fn.ti_resize(3, h);
-    file_fn.ti_write(buf, 1, 3, h);
+    uint8_t buf[4] = { r->head, r->count, r->max_slots, r->open };
+    file_fn.ti_resize(4, h);
+    file_fn.ti_write(buf, 1, 4, h);
     file_fn.ti_setarchivestatus(1, h);
     file_fn.ti_close(h);
 }
@@ -438,6 +446,14 @@ bool lwip_log_file_start(uint8_t max_archive_slots)
     g_prev_cb     = lwip_get_event_cb();
     g_running     = true;
     lwip_set_event_cb(log_event_cb);
+
+    /* Unclean-shutdown detection: see the ring metadata layout above. */
+    log_ring_t r;
+    ring_read(&r);
+    if (r.open)
+        WARN(LWIP_E030F);
+    r.open = 1;
+    ring_write(&r);
     return true;
 }
 
@@ -453,6 +469,10 @@ void lwip_log_file_stop(void)
     if (!g_running)
         return;
     log_flush_internal();
+    log_ring_t r;
+    ring_read(&r);
+    r.open = 0;
+    ring_write(&r);
     g_running = false;
     lwip_set_event_cb(g_prev_cb);
     g_prev_cb = NULL;

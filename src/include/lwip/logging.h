@@ -248,6 +248,7 @@ typedef enum lwip_state_change
  *   usb        USB Ethernet driver or device failure.
  *   storage    Reading or writing calculator files (appvars, logs).
  *   logic      Internal invariant violated or unexpected internal state (likely an lwIP-CE bug).
+ *   crash      The calculator reset or crashed (RAM cleared); evidence comes from the next session.
  * error-categories:end
  */
 typedef enum lwip_error_id
@@ -1036,6 +1037,7 @@ typedef enum lwip_error_id
     LWIP_E030C = 0x030C, // tls_x509_signature_algorithm(): fails and returns false. Trigger: `(seen & 7) != 7` @cert:70
     LWIP_E030D = 0x030D, // tls_x509_signature_algorithm(): fails and returns false. Trigger: `!tls_asn1_next(&c, &param) || (scheme == TLS_ALG_RSA_PKCS1_SHA256 && (param.tag != ASN1_NULL || param.len)) || scheme == TLS_ALG_ECDSA_SECP256R1_SHA256 || sche…` @cert:70
     LWIP_E030E = 0x030E, // tls_x509_signature_algorithm(): fails and returns false. Trigger: `c.cur != c.end` @cert:70
+    LWIP_E030F = 0x030F, // lwip_log_file_start(): the previous logging session never reached lwip_log_file_stop(), so it ended in a crash/NMI reset or RAM clear (its last log lines were lost with RAM), or the program exited or the calculator powered off without stopping the log. Trigger: `session-open flag still set in lwIPLgMD` @crash:50
     /* error-ids:end */
 } lwip_error_id_t;
 
