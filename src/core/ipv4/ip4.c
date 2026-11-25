@@ -826,7 +826,7 @@ ip4_output_if(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *dest,
               u8_t proto, struct netif *netif)
 {
 #if IP_OPTIONS_SEND
-  LWIP_TRACE_RETURN(ip4_output_if_opt(p, src, dest, ttl, tos, proto, netif, NULL, 0));
+  LWIP_TRACE_RETURN(LWIP_E00A4, ip4_output_if_opt(p, src, dest, ttl, tos, proto, netif, NULL, 0));
 }
 
 /**
@@ -849,10 +849,10 @@ ip4_output_if_opt(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *dest,
   }
 
 #if IP_OPTIONS_SEND
-  LWIP_TRACE_RETURN(ip4_output_if_opt_src(p, src_used, dest, ttl, tos, proto, netif,
+  LWIP_TRACE_RETURN(LWIP_E00A5, ip4_output_if_opt_src(p, src_used, dest, ttl, tos, proto, netif,
                                ip_options, optlen));
 #else /* IP_OPTIONS_SEND */
-  LWIP_TRACE_RETURN(ip4_output_if_src(p, src_used, dest, ttl, tos, proto, netif));
+  LWIP_TRACE_RETURN(LWIP_E00A6, ip4_output_if_src(p, src_used, dest, ttl, tos, proto, netif));
 #endif /* IP_OPTIONS_SEND */
 }
 
@@ -866,7 +866,7 @@ ip4_output_if_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *dest,
                   u8_t proto, struct netif *netif)
 {
 #if IP_OPTIONS_SEND
-  LWIP_TRACE_RETURN(ip4_output_if_opt_src(p, src, dest, ttl, tos, proto, netif, NULL, 0));
+  LWIP_TRACE_RETURN(LWIP_E00A7, ip4_output_if_opt_src(p, src, dest, ttl, tos, proto, netif, NULL, 0));
 }
 
 /**
@@ -904,7 +904,7 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
         LWIP_DEBUGF(IP_DEBUG | LWIP_DBG_LEVEL_SERIOUS, ("ip4_output_if_opt: optlen too long\n"));
         IP_STATS_INC(ip.err);
         MIB2_STATS_INC(mib2.ipoutdiscards);
-        LWIP_TRACE_RETURN(ERR_VAL);
+        LWIP_TRACE_RETURN(LWIP_E00A8, ERR_VAL);
       }
       /* round up to a multiple of 4 */
       optlen_aligned = (u16_t)((optlen + 3) & ~3);
@@ -914,7 +914,7 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
         LWIP_DEBUGF(IP_DEBUG | LWIP_DBG_LEVEL_SERIOUS, ("ip4_output_if_opt: not enough room for IP options in pbuf\n"));
         IP_STATS_INC(ip.err);
         MIB2_STATS_INC(mib2.ipoutdiscards);
-        LWIP_TRACE_RETURN(ERR_BUF);
+        LWIP_TRACE_RETURN(LWIP_E00A9, ERR_BUF);
       }
       MEMCPY(p->payload, ip_options, optlen);
       if (optlen < optlen_aligned) {
@@ -934,7 +934,7 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
 
       IP_STATS_INC(ip.err);
       MIB2_STATS_INC(mib2.ipoutdiscards);
-      LWIP_TRACE_RETURN(ERR_BUF);
+      LWIP_TRACE_RETURN(LWIP_E00AA, ERR_BUF);
     }
 
     iphdr = (struct ip_hdr *)p->payload;
@@ -1015,7 +1015,7 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
       LWIP_DEBUGF(IP_DEBUG | LWIP_DBG_LEVEL_SERIOUS, ("ip4_output: LWIP_IP_HDRINCL but pbuf is too short\n"));
       IP_STATS_INC(ip.err);
       MIB2_STATS_INC(mib2.ipoutdiscards);
-      LWIP_TRACE_RETURN(ERR_BUF);
+      LWIP_TRACE_RETURN(LWIP_E00AB, ERR_BUF);
     }
     iphdr = (struct ip_hdr *)p->payload;
     ip4_addr_copy(dest_addr, iphdr->dest);
@@ -1035,7 +1035,7 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
      ) {
     /* Packet to self, enqueue it for loopback */
     LWIP_DEBUGF(IP_DEBUG, ("netif_loop_output()\n"));
-    LWIP_TRACE_RETURN(netif_loop_output(netif, p));
+    LWIP_TRACE_RETURN(LWIP_E00AC, netif_loop_output(netif, p));
   }
 #if LWIP_MULTICAST_TX_OPTIONS
   if ((p->flags & PBUF_FLAG_MCASTLOOP) != 0) {
@@ -1046,12 +1046,12 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
 #if IP_FRAG
   /* don't fragment if interface has mtu set to 0 [loopif] */
   if (netif->mtu && (p->tot_len > netif->mtu)) {
-    LWIP_TRACE_RETURN(ip4_frag(p, netif, dest));
+    LWIP_TRACE_RETURN(LWIP_E00AD, ip4_frag(p, netif, dest));
   }
 #endif /* IP_FRAG */
 
   LWIP_DEBUGF(IP_DEBUG, ("ip4_output_if: call netif->output()\n"));
-  LWIP_TRACE_RETURN(netif->output(netif, p, dest));
+  LWIP_TRACE_RETURN(LWIP_E00AE, netif->output(netif, p, dest));
 }
 
 /**
@@ -1083,10 +1083,10 @@ ip4_output(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *dest,
     LWIP_DEBUGF(IP_DEBUG, ("ip4_output: No route to %"U16_F".%"U16_F".%"U16_F".%"U16_F"\n",
                            ip4_addr1_16(dest), ip4_addr2_16(dest), ip4_addr3_16(dest), ip4_addr4_16(dest)));
     IP_STATS_INC(ip.rterr);
-    LWIP_TRACE_RETURN(ERR_RTE);
+    LWIP_TRACE_RETURN(LWIP_E00AF, ERR_RTE);
   }
 
-  LWIP_TRACE_RETURN(ip4_output_if(p, src, dest, ttl, tos, proto, netif));
+  LWIP_TRACE_RETURN(LWIP_E00B0, ip4_output_if(p, src, dest, ttl, tos, proto, netif));
 }
 
 #if LWIP_NETIF_USE_HINTS
@@ -1121,14 +1121,14 @@ ip4_output_hinted(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *dest,
     LWIP_DEBUGF(IP_DEBUG, ("ip4_output: No route to %"U16_F".%"U16_F".%"U16_F".%"U16_F"\n",
                            ip4_addr1_16(dest), ip4_addr2_16(dest), ip4_addr3_16(dest), ip4_addr4_16(dest)));
     IP_STATS_INC(ip.rterr);
-    LWIP_TRACE_RETURN(ERR_RTE);
+    LWIP_TRACE_RETURN(LWIP_E00B1, ERR_RTE);
   }
 
   NETIF_SET_HINTS(netif, netif_hint);
   err = ip4_output_if(p, src, dest, ttl, tos, proto, netif);
   NETIF_RESET_HINTS(netif);
 
-  LWIP_TRACE_RETURN(err);
+  LWIP_TRACE_RETURN(LWIP_E00B2, err);
 }
 #endif /* LWIP_NETIF_USE_HINTS*/
 

@@ -328,7 +328,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
     h = file_fn.ti_open(LWIP_CFG_APPVAR, "r");
     if (!h)
     {
-        WARN();
+        WARN(LWIP_E007C);
         lwip_app_config_defaults(cfg);
         return false;
     }
@@ -336,7 +336,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
     if (size == 0u || size > sizeof(g_cfg_io.serialized) ||
         file_fn.ti_read(serialized, size, 1, h) != 1u)
     {
-        ERROR_CODE(size);
+        ERROR_CODE(LWIP_E007D, size);
         file_fn.ti_close(h);
         lwip_app_config_defaults(cfg);
         return false;
@@ -348,7 +348,7 @@ bool lwip_app_config_load(lwip_app_config_t *cfg)
             parse_legacy_config(cfg, serialized, size);
     if (!valid)
     {
-        WARN();
+        WARN(LWIP_E007E);
         lwip_app_config_defaults(cfg);
     }
     return valid;
@@ -366,7 +366,7 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
 
     if (!cfg)
     {
-        ERROR();
+        ERROR(LWIP_E007F);
         return false;
     }
     memset(serialized, 0, serialized_cap);
@@ -422,13 +422,13 @@ bool lwip_app_config_save(const lwip_app_config_t *cfg)
     h = file_fn.ti_open(LWIP_CFG_APPVAR, "w");
     if (!h)
     {
-        ERROR();
+        ERROR(LWIP_E0080);
         return false;
     }
     if (file_fn.ti_resize(used, h) != (int)used ||
         file_fn.ti_write(serialized, used, 1, h) != 1u)
     {
-        ERROR();
+        ERROR(LWIP_E0081);
         file_fn.ti_close(h);
         return false;
     }

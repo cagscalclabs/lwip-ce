@@ -136,6 +136,20 @@ jobs:
       - name: Audit fatal error logging
         run: python3 tests/host/error_logging/test_error_sites.py
 
+      # Error IDs (eXXXX) are part of the log format: each call site has
+      # exactly one, each is described in logging.h, and none present on the
+      # base branch may be removed or renumbered.
+      - name: Audit error IDs
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            python3 tools/error_ids/error_ids.py check --base FETCH_HEAD
+          elif git rev-parse -q --verify HEAD~1 >/dev/null; then
+            python3 tools/error_ids/error_ids.py check --base HEAD~1
+          else
+            python3 tools/error_ids/error_ids.py check
+          fi
+
       - name: Build dylib release
         id: make_dylib
         run: make dylib-release

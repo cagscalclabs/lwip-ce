@@ -14,9 +14,9 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
 {
     uint8_t *sum;
 
-    if (ctx == NULL) { ERROR(); return false; }
+    if (ctx == NULL) { ERROR(LWIP_E0280); return false; }
     tls_hmac_clear(ctx);
-    if (key == NULL && keylen != 0) { ERROR(); return false; }
+    if (key == NULL && keylen != 0) { ERROR(LWIP_E0281); return false; }
 
     if (!tls_hash_context_init(&ctx->_inner, algorithm)) {
         tls_hmac_clear(ctx);
@@ -30,14 +30,14 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
     if (ctx->blocklen == 0 || ctx->blocklen > TLS_HASH_MAX_BLOCK_LEN ||
         ctx->digestlen == 0 || ctx->digestlen > TLS_HASH_MAX_DIGEST_LEN ||
         ctx->digestlen > ctx->blocklen) {
-        ERROR_CODE(algorithm);
+        ERROR_CODE(LWIP_E0282, algorithm);
         tls_hmac_clear(ctx);
         return false;
     }
 
     sum = tls_scratch_alloc(TLS_HASH_MAX_BLOCK_LEN);
     if (!sum) {
-        ERROR();
+        ERROR(LWIP_E0283);
         tls_hmac_clear(ctx);
         return false;
     }
@@ -50,7 +50,7 @@ bool tls_hmac_context_init(struct tls_hmac_context *ctx, uint8_t algorithm,
         tls_hash_digest(&ctx->_inner, sum);
         keylen = ctx->digestlen;
         if (!tls_hash_context_init(&ctx->_inner, algorithm)) {
-            ERROR();
+            ERROR(LWIP_E0284);
             tls_scratch_free(sum, TLS_HASH_MAX_BLOCK_LEN);
             tls_hmac_clear(ctx);
             return false;

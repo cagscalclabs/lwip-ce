@@ -52,9 +52,9 @@ extern "C" {
 
 /** lwIP-CE release version (distinct from the vendored upstream lwIP version). */
 #define LWIP_CE_VERSION_MAJOR 3
-#define LWIP_CE_VERSION_MINOR 0
-#define LWIP_CE_VERSION_PATCH 0
-#define LWIP_CE_VERSION_STRING "3.0.0"
+#define LWIP_CE_VERSION_MINOR 2
+#define LWIP_CE_VERSION_PATCH 2
+#define LWIP_CE_VERSION_STRING "3.2.2"
 
     struct netif;
     struct tcp_pcb;

@@ -44,7 +44,7 @@ def audit_file(path: Path) -> list[str]:
                 context = "\n".join(lines[max(0, index - 8):index + 1])
                 reported = any(token in context for token in (
                     "ERROR_ABORT(", "ERROR_ABORT_CODE(", "ERROR_AUDIT:",
-                    "ERROR_CODE(", "ERROR();", "helper already aborted",
+                    "ERROR_CODE(", "ERROR(LWIP_E", "helper already aborted",
                 ))
                 if not reported:
                     failures.append(
@@ -55,7 +55,7 @@ def audit_file(path: Path) -> list[str]:
 
         context = "\n".join(lines[max(0, index - 2):index + 1])
         reported = any(token in context for token in (
-            "ERROR_AUDIT:", "ERROR_CODE(", "ERROR();",
+            "ERROR_AUDIT:", "ERROR_CODE(", "ERROR(LWIP_E",
         ))
         if not reported:
             failures.append(

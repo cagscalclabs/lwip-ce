@@ -285,7 +285,7 @@ tls_truststore_status_t tls_truststore_init(void)
     {
         tls_scratch_free(t, sizeof(*t));
         tls_ctx.truststore.status = TLS_STORE_HASH_FAIL;
-        ERROR_CODE(TLS_STORE_HASH_FAIL);
+        ERROR_CODE(LWIP_E02A0, TLS_STORE_HASH_FAIL);
         return TLS_STORE_HASH_FAIL;
     }
 
@@ -296,7 +296,7 @@ tls_truststore_status_t tls_truststore_init(void)
     {
         tls_scratch_free(t, sizeof(*t));
         tls_ctx.truststore.status = TLS_STORE_NOT_FOUND;
-        WARN_CODE(TLS_STORE_NOT_FOUND);
+        WARN_CODE(LWIP_E02A1, TLS_STORE_NOT_FOUND);
         return TLS_STORE_NOT_FOUND;
     }
     TS_TRACE("E0b appvar found");
@@ -308,7 +308,7 @@ tls_truststore_status_t tls_truststore_init(void)
         tls_scratch_free(t, sizeof(*t));
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_SIZE_INVALID;
-        ERROR_CODE(TLS_STORE_SIZE_INVALID);
+        ERROR_CODE(LWIP_E02A2, TLS_STORE_SIZE_INVALID);
         return TLS_STORE_SIZE_INVALID;
     }
     uint8_t *store_header_bytes = (uint8_t *)file_fn.ti_getdataptr(ts_h);
@@ -318,7 +318,7 @@ tls_truststore_status_t tls_truststore_init(void)
         tls_scratch_free(t, sizeof(*t));
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_VERSION_MISMATCH;
-        ERROR_CODE(TLS_STORE_VERSION_MISMATCH);
+        ERROR_CODE(LWIP_E02A3, TLS_STORE_VERSION_MISMATCH);
         return TLS_STORE_VERSION_MISMATCH;
     }
     uint8_t *store_db_start = store_header_bytes + TLS_TRUSTSTORE_HEADER_LEN;
@@ -352,7 +352,7 @@ tls_truststore_status_t tls_truststore_init(void)
         tls_scratch_free(t, sizeof(*t));
         file_fn.ti_close(ts_h);
         tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
-        ERROR_CODE(TLS_STORE_SIG_INVALID);
+        ERROR_CODE(LWIP_E02A4, TLS_STORE_SIG_INVALID);
         return TLS_STORE_SIG_INVALID;
     }
     TS_TRACE("E5 pss verify");
@@ -365,7 +365,7 @@ tls_truststore_status_t tls_truststore_init(void)
     {
         verified = false;
         tls_ctx.truststore.status = TLS_STORE_SIZE_INVALID;
-        ERROR_CODE(TLS_STORE_SIZE_INVALID);
+        ERROR_CODE(LWIP_E02A5, TLS_STORE_SIZE_INVALID);
     }
     file_fn.ti_close(ts_h);
     TS_TRACE("E6 verify done");
@@ -376,7 +376,7 @@ tls_truststore_status_t tls_truststore_init(void)
         {
             verified = false;
             tls_ctx.truststore.status = TLS_STORE_HASH_FAIL;
-            ERROR_CODE(TLS_STORE_HASH_FAIL);
+            ERROR_CODE(LWIP_E02A6, TLS_STORE_HASH_FAIL);
         }
     }
     if (verified)
@@ -393,7 +393,7 @@ tls_truststore_status_t tls_truststore_init(void)
         uint32_t now = lwip_sntp_get_unix_time();
         if (now != 0 && now > store_created &&
             now - store_created > TLS_TRUSTSTORE_AGE_WARN_SECONDS)
-            WARN_CODE((now - store_created) / (24u * 60u * 60u));
+            WARN_CODE(LWIP_E02A7, (now - store_created) / (24u * 60u * 60u));
         INFO("truststore verified");
     }
     else
@@ -402,7 +402,7 @@ tls_truststore_status_t tls_truststore_init(void)
             tls_ctx.truststore.status != TLS_STORE_HASH_FAIL)
         {
             tls_ctx.truststore.status = TLS_STORE_SIG_INVALID;
-            ERROR_CODE(TLS_STORE_SIG_INVALID);
+            ERROR_CODE(LWIP_E02A8, TLS_STORE_SIG_INVALID);
         }
     }
     tls_scratch_free(t, sizeof(*t));
@@ -489,7 +489,7 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
         {
             tls_truststore_invalidate(TLS_STORE_SIG_INVALID);
             file_fn.ti_close(h);
-            ERROR_CODE(TLS_STORE_SIG_INVALID);
+            ERROR_CODE(LWIP_E02A9, TLS_STORE_SIG_INVALID);
             return false;
         }
     }
@@ -502,7 +502,7 @@ static bool tls_truststore_open_db(const uint8_t **ski_index_out,
     {
         tls_truststore_invalidate(TLS_STORE_SIZE_INVALID);
         file_fn.ti_close(h);
-        ERROR_CODE(TLS_STORE_SIZE_INVALID);
+        ERROR_CODE(LWIP_E02AA, TLS_STORE_SIZE_INVALID);
         return false;
     }
 

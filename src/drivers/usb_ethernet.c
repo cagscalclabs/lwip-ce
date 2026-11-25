@@ -58,16 +58,16 @@ static void log_usb_transfer_status(usb_transfer_status_t status)
 {
     if (status & USB_TRANSFER_NO_DEVICE)
     {
-        WARN_CODE(status);
+        WARN_CODE(LWIP_E00F7, status);
     }
     if (status & USB_TRANSFER_STALLED)
     {
-        WARN_CODE(status);
+        WARN_CODE(LWIP_E00F8, status);
     }
     if (status & (USB_TRANSFER_ERROR | USB_TRANSFER_HOST_ERROR | USB_TRANSFER_BUS_ERROR |
                   USB_TRANSFER_OVERFLOW | USB_TRANSFER_FAILED))
     {
-        ERROR_CODE(status);
+        ERROR_CODE(LWIP_E00F9, status);
     }
 }
 /* RX cadence (milliseconds). The dispatch layer quantizes these to
@@ -540,7 +540,7 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
              * Deliberately NOT LWIP_ASSERT: in this port that halts the
              * program (lwip_log_fatal_at), which would defeat the
              * recover-and-continue behavior below. */
-            WARN_CODE(remaining > 0xFFFF ? 0xFFFF : remaining);
+            WARN_CODE(LWIP_E00FA, remaining > 0xFFFF ? 0xFFFF : remaining);
             uint8_t skip[16];
             while (remaining > 0)
             {
@@ -555,7 +555,7 @@ static size_t eth_rx_ring_drain(struct mem_buffer *rb, void *user, size_t budget
             LINK_STATS_INC(link.drop);
             if (++dev->rx_drain_errors >= ETH_RX_DRAIN_MAX_ERRORS)
             {
-                ERROR_CODE(dev->rx_drain_errors);
+                ERROR_CODE(LWIP_E00FB, dev->rx_drain_errors);
                 eth_abort_netif(dev);
             }
             break;
@@ -750,7 +750,7 @@ static bool eth_xmit_fatal_error(eth_device_t *dev, uint8_t retries)
 {
     if (retries == ETH_USB_MAX_RETRIES)
     {
-        ERROR_CODE(retries);
+        ERROR_CODE(LWIP_E00FC, retries);
         eth_abort_netif(dev);
         return true;
     }
@@ -1077,20 +1077,20 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     if (eth_is_shutting_down(dev))
-        LWIP_TRACE_RETURN(ERR_IF);
+        LWIP_TRACE_RETURN(LWIP_E00FD, ERR_IF);
     if (p->tot_len > ETHERNET_MTU)
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E00FE, ERR_MEM);
     /* Device mode: prepend a 2-byte big-endian length prefix so the host's
      * ACM/tty driver can reassemble frames from the byte stream. */
     u16_t prefix = dev->device_mode ? 2 : 0;
     struct pbuf *tbuf = pbuf_alloc(PBUF_RAW, (u16_t)(prefix + p->tot_len), PBUF_RAM);
     if (tbuf == NULL)
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E00FF, ERR_MEM);
     struct eth_tx_ctx *ctx = mem_malloc(sizeof(*ctx));
     if (ctx == NULL)
     {
         pbuf_free(tbuf);
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E0100, ERR_MEM);
     }
     LINK_STATS_INC(link.xmit);
     MIB2_STATS_NETIF_ADD(netif, ifoutoctets, p->tot_len);
@@ -1104,7 +1104,7 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     {
         pbuf_free(tbuf);
         mem_free(ctx);
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E0101, ERR_MEM);
     }
     ctx->dev = dev;
     ctx->p = tbuf;
@@ -1115,7 +1115,7 @@ static err_t ecm_bulk_transmit(struct netif *netif, struct pbuf *p)
     {
         eth_tx_release(ctx);
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
-        LWIP_TRACE_RETURN(ERR_IF);
+        LWIP_TRACE_RETURN(LWIP_E0102, ERR_IF);
     }
     eth_transfer_began(dev);
     return ERR_OK;
@@ -1363,10 +1363,10 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
 {
     eth_device_t *dev = (eth_device_t *)netif->state;
     if (eth_is_shutting_down(dev) || dev->dead)
-        LWIP_TRACE_RETURN(ERR_IF);
+        LWIP_TRACE_RETURN(LWIP_E0103, ERR_IF);
     uint16_t offset_ndp = get_next_offset(NCM_NTH_LEN, dev->class.ncm.ntb_params.wNdpInAlignment, 0);
     if (p->tot_len > ETHERNET_MTU)
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E0104, ERR_MEM);
 
     /* Size the NTB to the actual datagram, not the MTU. A 40-byte TCP ACK
      * was previously allocated and transmitted as a 1578-byte buffer; on
@@ -1377,12 +1377,12 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
     // allocate TX packet buffer
     struct pbuf *obuf = pbuf_alloc(PBUF_RAW, ntb_len, PBUF_RAM);
     if (obuf == NULL)
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E0105, ERR_MEM);
     struct eth_tx_ctx *ctx = mem_malloc(sizeof(*ctx));
     if (ctx == NULL)
     {
         pbuf_free(obuf);
-        LWIP_TRACE_RETURN(ERR_MEM);
+        LWIP_TRACE_RETURN(LWIP_E0106, ERR_MEM);
     }
 
     memset(obuf->payload, 0, ntb_len);
@@ -1433,7 +1433,7 @@ static err_t ncm_bulk_transmit(struct netif *netif, struct pbuf *p)
         pbuf_free(obuf);
         mem_free(ctx);
         (void)eth_xmit_fatal_error(dev, ETH_USB_MAX_RETRIES);
-        LWIP_TRACE_RETURN(ERR_IF);
+        LWIP_TRACE_RETURN(LWIP_E0107, ERR_IF);
     }
     eth_transfer_began(dev);
     return ERR_OK;
@@ -1753,7 +1753,7 @@ static bool init_ethernet_usb_device(usb_device_t device)
     eth_device_t *eth = mem_calloc(1, sizeof(eth_device_t));
     if (!eth)
     {
-        ERROR_CODE(ERR_MEM);
+        ERROR_CODE(LWIP_E0108, ERR_MEM);
         return false;
     }
     eth->device = device;
@@ -2154,7 +2154,7 @@ static void device_attach(void)
     eth_device_t *eth = mem_calloc(1, sizeof(eth_device_t));
     if (!eth)
     {
-        ERROR_CODE(ERR_MEM);
+        ERROR_CODE(LWIP_E0109, ERR_MEM);
         return;
     }
 

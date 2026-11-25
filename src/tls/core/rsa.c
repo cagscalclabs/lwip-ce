@@ -131,7 +131,7 @@ bool tls_rsa_encode_oaep(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (outbuf == NULL) ||
         (in_len == 0))
     {
-        ERROR();
+        ERROR(LWIP_E0298);
         return false;
     }
 
@@ -301,14 +301,14 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         (key->mod_len < RSA_MODULUS_MIN_SUPPORTED) ||
         (!(key->modulus[key->mod_len - 1] & 1)))
     {
-        ERROR();
+        ERROR(LWIP_E0299);
         return false;
     }
 
     /* Decode exponent from big-endian bytes into a uint24_t (LE). */
     if (key->exp_len == 0 || key->exp_len > 3)
     {
-        ERROR();
+        ERROR(LWIP_E029A);
         return false;
     }
     uint24_t exp = 0;
@@ -316,7 +316,7 @@ bool tls_rsa_encrypt(const uint8_t *inbuf, size_t in_len, uint8_t *outbuf,
         exp = (exp << 8) | key->exponent[i];
     if (!tls_rsa_public_key_shape_ok(key))
     {
-        ERROR();
+        ERROR(LWIP_E029B);
         return false;
     }
 
@@ -361,7 +361,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         (key->exp_len == 0) ||
         (key->exp_len > 3))
     {
-        ERROR();
+        ERROR(LWIP_E029C);
         return false;
     }
 
@@ -371,7 +371,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
         exp = (exp << 8) | key->exponent[i];
     if (!tls_rsa_public_key_shape_ok(key))
     {
-        ERROR();
+        ERROR(LWIP_E029D);
         return false;
     }
 
@@ -382,7 +382,7 @@ bool tls_rsa_decrypt_signature(const uint8_t *signature,
      * fine because both signature and modulus are public values. */
     if (memcmp(signature, key->modulus, key->mod_len) >= 0)
     {
-        ERROR();
+        ERROR(LWIP_E029E);
         return false;
     }
 
@@ -505,7 +505,7 @@ bool tls_rsa_pss_verify(const uint8_t *encoded_msg, size_t em_len,
     ok = tls_bytes_compare(t->digest, H, t->hash.digestlen);
     if (!ok)
     {
-        ERROR();
+        ERROR(LWIP_E029F);
     }
 cleanup:
     tls_scratch_free(t, sizeof(*t));

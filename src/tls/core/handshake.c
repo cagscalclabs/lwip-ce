@@ -298,7 +298,7 @@ static bool transcript_hash_digest(struct tls_hash_context *ctx,
     struct tls_hash_context *ctx_copy = tls_scratch_alloc(sizeof(*ctx_copy));
     if (!ctx_copy)
     {
-        ERROR();
+        ERROR(LWIP_E0126);
         return false;
     }
     memcpy(ctx_copy, ctx, sizeof(*ctx_copy));
@@ -536,7 +536,7 @@ static bool tls_record_aead_init(struct tls_aes_context *aes_ctx,
     const struct tls_cipher_suite_info *s = tls_cipher_suite_info(cipher_suite);
     if (!s || key_len != s->key_len)
     {
-        ERROR_CODE(0xb9);
+        ERROR_CODE(LWIP_E0127, 0xb9);
         return false;
     }
     if (s->mode == TLS_AES_CCM)
@@ -595,7 +595,7 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
 {
     if (need > TLS_HS_REASSEMBLY_MAX)
     {
-        ERROR_CODE(0x01);
+        ERROR_CODE(LWIP_E0128, 0x01);
         return false;
     }
     if (ctx->hs_reasm_cap >= need)
@@ -617,7 +617,7 @@ static bool tls_hs_reasm_grow(struct tls_handshake_context *ctx, size_t need)
     uint8_t *nb = (uint8_t *)mem_buffer_custom_malloc(new_cap);
     if (!nb)
     {
-        ERROR_CODE(0x02);
+        ERROR_CODE(LWIP_E0129, 0x02);
         return false;
     }
     if (ctx->hs_reasm_len)
@@ -870,7 +870,7 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
         tls_asn1_tag_number(cert_seq.tag) != ASN1_SEQUENCE ||
         !tls_asn1_tag_constructed(cert_seq.tag))
     {
-        ERROR_CODE(0x03);
+        ERROR_CODE(LWIP_E012A, 0x03);
         return false;
     }
     if (!tls_asn1_child_cursor(&cert_seq, &items) ||
@@ -878,14 +878,14 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
         !tls_asn1_next(&items, &sig_alg) ||
         !tls_asn1_next(&items, &sig_val))
     {
-        ERROR_CODE(0x04);
+        ERROR_CODE(LWIP_E012B, 0x04);
         return false;
     }
     if (!tls_asn1_tag_constructed(tbs.tag) ||
         tls_asn1_tag_number(tbs.tag) != ASN1_SEQUENCE ||
         tls_asn1_tag_number(sig_val.tag) != ASN1_BITSTRING)
     {
-        ERROR_CODE(0x05);
+        ERROR_CODE(LWIP_E012C, 0x05);
         return false;
     }
 
@@ -895,7 +895,7 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
 
     if (!tls_x509_signature_algorithm(&sig_alg, sig_alg_out))
     {
-        ERROR_CODE(0x06);
+        ERROR_CODE(LWIP_E012D, 0x06);
         return false;
     }
 
@@ -904,19 +904,19 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
     struct tls_asn1_tlv serial, inner_alg;
     if (!tls_asn1_child_cursor(&tbs, &body) || !tls_asn1_next(&body, &serial))
     {
-        ERROR_CODE(0x07);
+        ERROR_CODE(LWIP_E012E, 0x07);
         return false;
     }
     if (serial.tag == 0xa0 && !tls_asn1_next(&body, &serial))
     {
-        ERROR_CODE(0x08);
+        ERROR_CODE(LWIP_E012F, 0x08);
         return false;
     }
     if (serial.tag != ASN1_INTEGER || !tls_asn1_next(&body, &inner_alg) ||
         inner_alg.tag != sig_alg.tag || inner_alg.len != sig_alg.len ||
         memcmp(inner_alg.value, sig_alg.value, sig_alg.len))
     {
-        ERROR_CODE(0x09);
+        ERROR_CODE(LWIP_E0130, 0x09);
         return false;
     }
 
@@ -924,7 +924,7 @@ static bool tls_cert_extract_sig_material(const uint8_t *der, size_t der_len,
      * (0 for a byte-aligned signature); the rest is the signature. */
     if (sig_val.len < 2 || sig_val.value[0] != 0x00)
     {
-        ERROR_CODE(0x0a);
+        ERROR_CODE(LWIP_E0131, 0x0a);
         return false;
     }
     *sig_out = sig_val.value + 1;
@@ -1270,19 +1270,19 @@ static bool tls_cert_anchor_root(struct tls_handshake_context *ctx,
                                           w->topmost_authority_key_id_len,
                                           &root_entry) || !root_entry)
         {
-            ERROR_CODE(0x65);
+            ERROR_CODE(LWIP_E0132, 0x65);
             return false;
         }
         if (memcmp(root_entry->subject, w->pending_issuer_name_digest,
                    TLS_TRUSTSTORE_SUBJECT_LEN) != 0)
         {
-            ERROR_CODE(0x65);
+            ERROR_CODE(LWIP_E0133, 0x65);
             return false;
         }
         if (tls_cert_verify_root_entry(ctx, w, root_entry, true) != TLS_KEY_OP_OK)
         {
             if (alert) *alert = TLS_ALERT_BAD_CERTIFICATE;
-            ERROR_CODE(0x65);
+            ERROR_CODE(LWIP_E0134, 0x65);
             return false;
         }
         if (anchor_out)
@@ -1313,11 +1313,11 @@ static bool tls_cert_anchor_root(struct tls_handshake_context *ctx,
         }
         if (found_candidate && alert)
             *alert = TLS_ALERT_BAD_CERTIFICATE;
-        ERROR_CODE(0x66);
+        ERROR_CODE(LWIP_E0135, 0x66);
         return false;
     }
     /* No pending topmost link leaves nothing that can be anchored. */
-    ERROR_CODE(0x67);
+    ERROR_CODE(LWIP_E0136, 0x67);
     return false;
 }
 
@@ -1511,7 +1511,7 @@ static bool tls_cert_job_run_head(struct tls_handshake_context *ctx,
         {
             if (alert)
                 *alert = TLS_ALERT_INTERNAL_ERROR;
-            ERROR();
+            ERROR(LWIP_E0137);
             ok = false;
         }
     }
@@ -1519,7 +1519,7 @@ static bool tls_cert_job_run_head(struct tls_handshake_context *ctx,
     {
         ok = tls_cert_verify_pending_link(ctx, &job->link, &job->issuer, true) == TLS_KEY_OP_OK;
         if (!ok)
-            ERROR();
+            ERROR(LWIP_E0138);
     }
 
     if (ok && job->link.pending_ocsp_url[0] != '\0')
@@ -1578,13 +1578,13 @@ static bool tls_cert_job_enqueue(struct tls_cert_walker *w, const struct tls_key
      * queue is a logic error: fail closed. */
     if (ctx->cert_jobs_count >= TLS_CERT_CHAIN_MAX)
     {
-        ERROR();
+        ERROR(LWIP_E0139);
         return false;
     }
     job = (struct tls_cert_job *)mem_buffer_custom_malloc(sizeof(*job));
     if (!job)
     {
-        ERROR_CODE(0x70);
+        ERROR_CODE(LWIP_E013A, 0x70);
         return false;
     }
     mem_stats_tls_direct_add(sizeof(*job), sizeof(*job));
@@ -1603,7 +1603,7 @@ static bool tls_cert_job_enqueue(struct tls_cert_walker *w, const struct tls_key
     {
         job->link.pending_sig = NULL; /* still owned by the walker */
         tls_cert_job_free(job);
-        ERROR_CODE(0x71);
+        ERROR_CODE(LWIP_E013B, 0x71);
         return false;
     }
     w->link.pending_sig = NULL; /* ownership moved to the job */
@@ -1647,7 +1647,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         tls_scratch_free(subject_name_digest, TLS_SHA256_DIGEST_LEN);
         if (!name_match)
         {
-            ERROR_CODE(0x15);
+            ERROR_CODE(LWIP_E013C, 0x15);
             return false;
         }
 
@@ -1660,7 +1660,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
                                    w->link.pending_ocsp_issuer_name_hash,
                                    w->link.pending_ocsp_issuer_key_hash)))
         {
-            ERROR_CODE(0x16);
+            ERROR_CODE(LWIP_E013D, 0x16);
             return false;
         }
 
@@ -1668,7 +1668,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
          * run from the dispatch tick (see the job section above). */
         if (!tls_cert_job_enqueue(w, &cert->pubkey))
         {
-            ERROR();
+            ERROR(LWIP_E013E);
             return false;
         }
 
@@ -1691,7 +1691,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
     if (!tls_cert_extract_sig_material(w->cert_buf, w->cert_buf_len, &tbs,
                                        &tbs_len, &sig_alg, &sig, &sig_len))
     {
-        ERROR_CODE(0x0b);
+        ERROR_CODE(LWIP_E013F, 0x0b);
         return false;
     }
     {
@@ -1699,7 +1699,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
             ? TLS_HASH_SHA384 : TLS_HASH_SHA256;
         if (!tls_hash_context_init(w->cert_hash, tbs_hash))
         {
-            ERROR_CODE(0x0c);
+            ERROR_CODE(LWIP_E0140, 0x0c);
             return false;
         }
         tls_hash_update(w->cert_hash, tbs, tbs_len);
@@ -1711,7 +1711,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
      * key; arbitrary oversized signatures remain malformed. */
     if (sig_len == 0)
     {
-        ERROR_CODE(0x0d);
+        ERROR_CODE(LWIP_E0141, 0x0d);
         return false;
     }
     else if (sig_alg == TLS_ALG_UNKNOWN)
@@ -1728,7 +1728,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         if (sig_alg != TLS_ALG_RSA_PKCS1_SHA256 &&
             sig_alg != TLS_ALG_RSA_PSS_RSAE_SHA256)
         {
-            ERROR_CODE(0x0d);
+            ERROR_CODE(LWIP_E0142, 0x0d);
             return false;
         }
         w->link.pending_sig = NULL;
@@ -1741,7 +1741,7 @@ static bool tls_cert_chain_verify_one(struct tls_cert_walker *w,
         w->link.pending_sig = (uint8_t *)mem_buffer_custom_malloc(sig_len);
         if (!w->link.pending_sig)
         {
-            ERROR_CODE(0x0e);
+            ERROR_CODE(LWIP_E0143, 0x0e);
             return false;
         }
         mem_stats_tls_direct_add(sig_len, sig_len);
@@ -1835,14 +1835,14 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     w->fail_alert = TLS_ALERT_BAD_CERTIFICATE;
     if (!tls_x509_parse_certificate(w->cert_buf, w->cert_buf_len, &cert))
     {
-        ERROR_CODE(0x01);
+        ERROR_CODE(LWIP_E0144, 0x01);
         return false;
     }
     if (cert.pubkey.type == TLS_KEY_TYPE_UNKNOWN ||
         ((cert.pubkey.type == TLS_KEY_TYPE_RSA)
              ? cert.pubkey.rsa.mod_len == 0 : cert.pubkey.ec.len == 0))
     {
-        ERROR_CODE(0x02);
+        ERROR_CODE(LWIP_E0145, 0x02);
         return false;
     }
     /* Enforce RSA key size policy: 2048-4096 bits only.  Keys shorter than
@@ -1853,7 +1853,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         (cert.pubkey.rsa.mod_len < RSA_MODULUS_MIN_SUPPORTED ||
          cert.pubkey.rsa.mod_len > RSA_MODULUS_MAX_SUPPORTED))
     {
-        ERROR_CODE(0x02);
+        ERROR_CODE(LWIP_E0146, 0x02);
         return false;
     }
 
@@ -1865,7 +1865,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if (now == 0 || !tls_x509_time_in_validity(&cert, now))
     {
         w->fail_alert = TLS_ALERT_CERTIFICATE_EXPIRED;
-        ERROR_CODE(0x03);
+        ERROR_CODE(LWIP_E0147, 0x03);
         return false;
     }
 
@@ -1875,7 +1875,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
                                             is_leaf ? 0 :
                                                 w->non_self_issued_ca_count))
     {
-        ERROR_CODE(0x12);
+        ERROR_CODE(LWIP_E0148, 0x12);
         return false;
     }
 
@@ -1888,7 +1888,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
                                          w->subordinate_names,
                                          w->subordinate_names_len))
     {
-        ERROR_CODE(0x13);
+        ERROR_CODE(LWIP_E0149, 0x13);
         return false;
     }
 
@@ -1900,7 +1900,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
                                        cert.subject_cn, cert.subject_cn_len,
                                        w->ctx->hostname))
         {
-            ERROR_CODE(0x04);
+            ERROR_CODE(LWIP_E014A, 0x04);
             return false;
         }
     }
@@ -1918,14 +1918,14 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 
         if (mat_len == 0)
         {
-            ERROR_CODE(0x0f);
+            ERROR_CODE(LWIP_E014B, 0x0f);
             return false;
         }
 
         uint8_t *mat = (uint8_t *)mem_buffer_custom_malloc(mat_len);
         if (!mat)
         {
-            ERROR_CODE(0x10);
+            ERROR_CODE(LWIP_E014C, 0x10);
             return false;
         }
         mem_stats_tls_direct_add(mat_len, mat_len);
@@ -1966,7 +1966,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
 
     if (!tls_cert_chain_verify_one(w, &cert, is_leaf))
     {
-        ERROR_CODE(0x11);
+        ERROR_CODE(LWIP_E014D, 0x11);
         return false;
     }
 
@@ -1980,7 +1980,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
         char *url = NULL;
         if (!tls_x509_get_ocsp_url(cert.extensions, cert.extensions_len, &url))
         {
-            ERROR_CODE(0x17);
+            ERROR_CODE(LWIP_E014E, 0x17);
             return false;
         }
         if (url)
@@ -1989,7 +1989,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
             if (url_len == 0 || url_len >= sizeof(w->link.pending_ocsp_url))
             {
                 tls_ocsp_free(url);
-                ERROR_CODE(0x18);
+                ERROR_CODE(LWIP_E014F, 0x18);
                 return false;
             }
             memcpy(w->link.pending_ocsp_url, url, url_len + 1u);
@@ -2005,7 +2005,7 @@ static bool tls_cert_walker_validate_one(struct tls_cert_walker *w)
     if ((is_leaf || !tls_cert_is_self_issued(&cert)) &&
         !tls_cert_walker_append_constraint_names(w, &cert))
     {
-        ERROR_CODE(0x14);
+        ERROR_CODE(LWIP_E0150, 0x14);
         return false;
     }
 
@@ -2070,7 +2070,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                     /* RFC 8446 4.4.2: empty when the server authenticates. */
                     tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL,
                                    TLS_ALERT_ILLEGAL_PARAMETER);
-                    ERROR_CODE(0x0f);
+                    ERROR_CODE(LWIP_E0151, 0x0f);
                     w->state = CW_ERROR;
                     return false;
                 }
@@ -2101,14 +2101,14 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                 {
                     tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL,
                                    TLS_ALERT_ILLEGAL_PARAMETER);
-                    ERROR_CODE(0x16);
+                    ERROR_CODE(LWIP_E0152, 0x16);
                     w->state = CW_ERROR;
                     return false;
                 }
                 if (value == 0 || value > SIZE_MAX - 3u ||
                     w->chain_remaining < 3u + value)
                 {
-                    ERROR_CODE(0x10);
+                    ERROR_CODE(LWIP_E0153, 0x10);
                     w->state = CW_ERROR;
                     return false;
                 }
@@ -2117,7 +2117,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                 w->cert_buf = (uint8_t *)mem_buffer_custom_malloc(value);
                 if (!w->cert_buf)
                 {
-                    ERROR_CODE(0x11);
+                    ERROR_CODE(LWIP_E0154, 0x11);
                     w->state = CW_ERROR;
                     return false;
                 }
@@ -2132,7 +2132,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                  * overflow a 3-byte size_t, but guard defensively anyway. */
                 if (value > 0xFFFF || w->chain_remaining < 2 + value)
                 {
-                    ERROR_CODE(0x13);
+                    ERROR_CODE(LWIP_E0155, 0x13);
                     w->state = CW_ERROR;
                     return false;
                 }
@@ -2200,7 +2200,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
             if (w->cert_buf_len + take > w->cert_buf_cap)
             {
                 w->state = CW_ERROR;
-                ERROR_CODE(0x12);
+                ERROR_CODE(LWIP_E0156, 0x12);
                 return false;
             }
             memcpy(w->cert_buf + w->cert_buf_len, bytes + off, take);
@@ -2226,7 +2226,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
                                    w->fail_alert ? w->fail_alert
                                                  : TLS_ALERT_BAD_CERTIFICATE);
                     w->state = CW_ERROR;
-                    ERROR_CODE(0x13);
+                    ERROR_CODE(LWIP_E0157, 0x13);
                     return false;
                 }
                 if (w->cert_index < UINT16_MAX) w->cert_index++;
@@ -2238,7 +2238,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
 
         default:
             w->state = CW_ERROR;
-            ERROR_CODE(0x14);
+            ERROR_CODE(LWIP_E0158, 0x14);
             return false;
         }
 
@@ -2251,7 +2251,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
             w->chain_remaining == prev_chain_remaining &&
             w->len_have == prev_len_have)
         {
-            ERROR();
+            ERROR(LWIP_E0159);
             w->state = CW_ERROR;
             return false;
         }
@@ -2261,7 +2261,7 @@ static bool tls_cert_walker_feed(struct tls_cert_walker *w,
     if (w->state == CW_DONE && off < len)
     {
         tls_send_alert(w->ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
-        ERROR_CODE(0x17);
+        ERROR_CODE(LWIP_E015A, 0x17);
         w->state = CW_ERROR;
         return false;
     }
@@ -2289,7 +2289,7 @@ static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
             ctx->cert_walker = tls_cert_walker_new(ctx);
             if (!ctx->cert_walker)
             {
-                ERROR_CODE(0x12);
+                ERROR_CODE(LWIP_E015B, 0x12);
                 return false;
             }
         }
@@ -2301,7 +2301,7 @@ static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
         }
         if (!tls_cert_walker_feed(ctx->cert_walker, bytes, take))
         {
-            ERROR_CODE(0x15);
+            ERROR_CODE(LWIP_E015C, 0x15);
             return false;
         }
         ctx->hs_reasm_body_fed += take;
@@ -2310,7 +2310,7 @@ static bool tls_feed_inflight_body(struct tls_handshake_context *ctx,
     /* Non-Certificate: legacy flat append into hs_reasm_buf. */
     if (!tls_hs_reasm_grow(ctx, ctx->hs_reasm_len + take))
     {
-        ERROR_CODE(0x16);
+        ERROR_CODE(LWIP_E015D, 0x16);
         return false;
     }
     memcpy(ctx->hs_reasm_buf + ctx->hs_reasm_len, bytes, take);
@@ -2332,7 +2332,7 @@ static bool tls_dispatch_inflight(struct tls_handshake_context *ctx)
         if (!ctx->cert_walker)
         {
             tls_hs_reasm_reset(ctx);
-            ERROR_CODE(0x17);
+            ERROR_CODE(LWIP_E015E, 0x17);
             return false;
         }
         ok = tls_recv_certificate_streamed(ctx, ctx->cert_walker);
@@ -2374,7 +2374,7 @@ static bool tls_hs_defer_bytes(struct tls_handshake_context *ctx,
         return true;
     if (need > TLS_HS_DEFERRED_MAX)
     {
-        ERROR_CODE(0x72);
+        ERROR_CODE(LWIP_E015F, 0x72);
         return false;
     }
     if (need > ctx->hs_deferred_cap)
@@ -2383,7 +2383,7 @@ static bool tls_hs_defer_bytes(struct tls_handshake_context *ctx,
         uint8_t *nb = (uint8_t *)mem_buffer_custom_malloc(cap);
         if (!nb)
         {
-            ERROR_CODE(0x73);
+            ERROR_CODE(LWIP_E0160, 0x73);
             return false;
         }
         mem_stats_tls_direct_add(cap, cap);
@@ -2446,13 +2446,13 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         if (body_len > SIZE_MAX - 4u)
         {
             tls_hs_reasm_reset(ctx);
-            ERROR_CODE(0x18);
+            ERROR_CODE(LWIP_E0161, 0x18);
             return false;
         }
         if (body_len == 0)
         {
             tls_hs_reasm_reset(ctx);
-            ERROR_CODE(0x18);
+            ERROR_CODE(LWIP_E0162, 0x18);
             return false;
         }
         ctx->hs_reasm_expected = 4 + body_len;
@@ -2460,7 +2460,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
             ctx->hs_reasm_expected > TLS_HS_REASSEMBLY_MAX)
         {
             tls_hs_reasm_reset(ctx);
-            ERROR_CODE(0x18);
+            ERROR_CODE(LWIP_E0163, 0x18);
             return false;
         }
         /* If the just-revealed message is Certificate, feed the 4-byte
@@ -2492,7 +2492,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
                 tls_cert_walker_free(ctx->cert_walker);
                 ctx->cert_walker = NULL;
                 ctx->hs_reasm_body_fed = 0;
-                ERROR_CODE(0x19);
+                ERROR_CODE(LWIP_E0164, 0x19);
                 return false;
             }
             off += take;
@@ -2505,7 +2505,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
 
         if (!tls_dispatch_inflight(ctx))
         {
-            ERROR_CODE(0x1a);
+            ERROR_CODE(LWIP_E0165, 0x1a);
             return false;
         }
     }
@@ -2523,7 +2523,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         if (ctx->key_change_pending)
         {
             tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
-            ERROR_CODE(0x1b);
+            ERROR_CODE(LWIP_E0166, 0x1b);
             return false;
         }
 
@@ -2533,14 +2533,14 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
                           (size_t)buf[off + 3];
         if (body_len > SIZE_MAX - 4u)
         {
-            ERROR_CODE(0x1b);
+            ERROR_CODE(LWIP_E0167, 0x1b);
             return false;
         }
         size_t total = 4 + body_len;
 
         if (body_len == 0)
         {
-            ERROR_CODE(0x1b);
+            ERROR_CODE(LWIP_E0168, 0x1b);
             return false;
         }
 
@@ -2549,7 +2549,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
         {
             /* Non-Certificate parsers hold their message flat, so enforce the
              * documented memory bound. Certificate chains stream below. */
-            ERROR_CODE(0x1b);
+            ERROR_CODE(LWIP_E0169, 0x1b);
             return false;
         }
 
@@ -2560,7 +2560,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
              * alloc/free; hs_reasm_buf only ever holds the 4-byte header. */
             if (!tls_hs_reasm_grow(ctx, 4))
             {
-                ERROR_CODE(0x1c);
+                ERROR_CODE(LWIP_E016A, 0x1c);
                 return false;
             }
             memcpy(ctx->hs_reasm_buf, buf + off, 4);
@@ -2582,7 +2582,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
                     tls_cert_walker_free(ctx->cert_walker);
                     ctx->cert_walker = NULL;
                     ctx->hs_reasm_body_fed = 0;
-                    ERROR_CODE(0x1d);
+                    ERROR_CODE(LWIP_E016B, 0x1d);
                     return false;
                 }
                 off += body_avail;
@@ -2594,7 +2594,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
             }
             if (!tls_dispatch_inflight(ctx))
             {
-                ERROR_CODE(0x1e);
+                ERROR_CODE(LWIP_E016C, 0x1e);
                 return false;
             }
             continue;
@@ -2607,7 +2607,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
             size_t have = buf_len - off;
             if (!tls_hs_reasm_grow(ctx, total))
             {
-                ERROR_CODE(0x1f);
+                ERROR_CODE(LWIP_E016D, 0x1f);
                 return false;
             }
             memcpy(ctx->hs_reasm_buf, buf + off, have);
@@ -2618,7 +2618,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
 
         if (!tls_dispatch_inner_handshake(ctx, msg_type, buf + off, total))
         {
-            ERROR_CODE(0x20);
+            ERROR_CODE(LWIP_E016E, 0x20);
             return false;
         }
         off += total;
@@ -2634,7 +2634,7 @@ static bool tls_consume_handshake_buffer(struct tls_handshake_context *ctx,
          * 4 bytes so a follow-up call can read the length. */
         if (!tls_hs_reasm_grow(ctx, 4))
         {
-            ERROR_CODE(0x21);
+            ERROR_CODE(LWIP_E016F, 0x21);
             return false;
         }
         memcpy(ctx->hs_reasm_buf, buf + off, have);
@@ -2781,7 +2781,7 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
      * back; reaching here with jobs queued is a logic error: fail closed. */
     if (ctx->cert_jobs != NULL || ctx->ocsp_pending)
     {
-        ERROR_CODE(0x74);
+        ERROR_CODE(LWIP_E0170, 0x74);
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
@@ -2813,7 +2813,7 @@ static bool tls_dispatch_inner_handshake(struct tls_handshake_context *ctx,
     }
     if (!ok)
     {
-        ERROR_CODE(msg_type);
+        ERROR_CODE(LWIP_E0171, msg_type);
     }
     else if (msg_type == TLS_HANDSHAKE_FINISHED ||
              msg_type == TLS_HANDSHAKE_KEY_UPDATE)
@@ -2839,12 +2839,12 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
 {
     if (!ctx)
     {
-        ERROR_CODE(0x22);
+        ERROR_CODE(LWIP_E0172, 0x22);
         return false;
     }
     if (plaintext_len != 0 && !plaintext)
     {
-        ERROR_CODE(0x23);
+        ERROR_CODE(LWIP_E0173, 0x23);
         return false;
     }
 
@@ -2869,7 +2869,7 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
             if (!q)
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
-                ERROR_CODE(0x24);
+                ERROR_CODE(LWIP_E0174, 0x24);
                 return false;
             }
             size_t avail = (size_t)q->len;
@@ -2881,7 +2881,7 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
                                               chunk))
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
-                ERROR_CODE(0x25);
+                ERROR_CODE(LWIP_E0175, 0x25);
                 return false;
             }
 
@@ -2912,7 +2912,7 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
         {
             tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECODE_ERROR);
             ctx->state = TLS_STATE_ERROR;
-            ERROR_CODE(0x26);
+            ERROR_CODE(LWIP_E0176, 0x26);
             return false;
         }
 
@@ -2924,14 +2924,14 @@ bool tls_process_inner_plaintext_pbuf(struct tls_handshake_context *ctx,
         if (alert_desc == TLS_ALERT_CLOSE_NOTIFY)
             ctx->peer_close_notify_received = true;
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(alert_desc);
-        ERROR_INFO(tls_alert_name(alert_desc));
+        ERROR_CODE(LWIP_E0177, alert_desc);
+        ERROR_INFO(LWIP_E0178, tls_alert_name(alert_desc));
         return false;
     }
 
     /* Application data during handshake is unexpected. */
     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
-    ERROR_CODE(0x27);
+    ERROR_CODE(LWIP_E0179, 0x27);
     return false;
 }
 
@@ -2986,7 +2986,7 @@ static bool tls_handshake_init_common(
 {
     if (!ctx)
     {
-        ERROR_CODE(0x28);
+        ERROR_CODE(LWIP_E017A, 0x28);
         return false;
     }
 
@@ -3032,7 +3032,7 @@ static bool tls_handshake_init_common(
                             sizeof(ctx->client_random),
                             TLS_RNG_STRENGTH_128) == NULL)
     {
-        ERROR_CODE(0x2b);
+        ERROR_CODE(LWIP_E017B, 0x2b);
         return false;
     }
 
@@ -3041,7 +3041,7 @@ static bool tls_handshake_init_common(
     if (!transcript_hash_init(ctx->transcript_hash, TLS_HASH_SHA256))
     {
         ctx->transcript_hash = NULL;
-        ERROR_CODE(0x29);
+        ERROR_CODE(LWIP_E017C, 0x29);
         return false;
     }
 
@@ -3049,7 +3049,7 @@ static bool tls_handshake_init_common(
                             sizeof(ctx->ecdhe_private),
                             TLS_RNG_STRENGTH_128) == NULL)
     {
-        ERROR_CODE(0x2c);
+        ERROR_CODE(LWIP_E017D, 0x2c);
         return false;
     }
 
@@ -3058,7 +3058,7 @@ static bool tls_handshake_init_common(
                             TLS_RNG_STRENGTH_128) == NULL)
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
-        ERROR_CODE(0x2b);
+        ERROR_CODE(LWIP_E017E, 0x2b);
         return false;
     }
 
@@ -3091,7 +3091,7 @@ static int tls_handshake_keyshare_fail(struct tls_handshake_context *ctx, uint16
     tls_secure_memzero(ctx->p256_private, sizeof(ctx->p256_private));
     ctx->keyshare_state = TLS_KEYSHARE_STATE_ERROR;
     ctx->state = TLS_STATE_ERROR;
-    ERROR_CODE(code);
+    ERROR_CODE(LWIP_E017F, code);
     return -1;
 }
 
@@ -3110,7 +3110,7 @@ int tls_handshake_keyshares_step(struct tls_handshake_context *ctx)
     }
     if (ctx->keyshare_state != TLS_KEYSHARE_STATE_GENERATING)
     {
-        ERROR_CODE(0x28);
+        ERROR_CODE(LWIP_E0180, 0x28);
         return -1;
     }
 
@@ -3270,7 +3270,7 @@ bool tls_handshake_init(
     {
         tls_secure_memzero(ctx->ecdhe_private, 32);
         tls_secure_memzero(ctx->p256_private, 32);
-        ERROR_CODE(0x2a);
+        ERROR_CODE(LWIP_E0181, 0x2a);
         return false;
     }
 
@@ -3446,14 +3446,14 @@ bool tls_send_client_hello(
 
     if (!ctx || !written || (!out && out_len != 0))
     {
-        ERROR();
+        ERROR(LWIP_E0182);
         return false;
     }
 
     bool is_hrr_retry = (ctx->state == TLS_STATE_HRR_RECEIVED);
     if (!is_hrr_retry && ctx->state != TLS_STATE_INIT)
     {
-        ERROR();
+        ERROR(LWIP_E0183);
         return false;
     }
 
@@ -3462,7 +3462,7 @@ bool tls_send_client_hello(
     if (use_p256_share &&
         !(ctx->keyshare_ready & TLS_KEYSHARE_P256_READY))
     {
-        ERROR_CODE(0x2b);
+        ERROR_CODE(LWIP_E0184, 0x2b);
         return false;
     }
     /* A cookie-only HRR leaves the X25519 key share unchanged. */
@@ -3489,14 +3489,14 @@ bool tls_send_client_hello(
         hostname_len = strlen(ctx->hostname);
         if (hostname_len > 0xFFFFu - 5u)
         {
-            ERROR_CODE(0x2c);
+            ERROR_CODE(LWIP_E0185, 0x2c);
             return false;
         }
         uint8_t ip[16];
         int ip_len = tls_identity_ip(ctx->hostname, ip);
         if (ip_len < 0)
         {
-            ERROR_CODE(0x2d);
+            ERROR_CODE(LWIP_E0186, 0x2d);
             return false;
         }
         /* SNI HostName is a DNS name, never an IP literal. */
@@ -3536,7 +3536,7 @@ bool tls_send_client_hello(
         (ctx->psk_identity.identity_len == 0 ||
          ctx->psk_identity.identity_len > TLS_PSK_IDENTITY_MAX_LEN))
     {
-        ERROR_CODE(0x2e);
+        ERROR_CODE(LWIP_E0187, 0x2e);
         return false;
     }
 
@@ -3545,7 +3545,7 @@ bool tls_send_client_hello(
         size_t alpn_offset = 0;
         if (!ctx->alpn_protocols || ctx->alpn_protocols_len > 0xFFFFu)
         {
-            ERROR_CODE(0x2f);
+            ERROR_CODE(LWIP_E0188, 0x2f);
             return false;
         }
         while (alpn_offset < ctx->alpn_protocols_len)
@@ -3554,7 +3554,7 @@ bool tls_send_client_hello(
             if (protocol_len == 0 ||
                 protocol_len > ctx->alpn_protocols_len - alpn_offset)
             {
-                ERROR_CODE(0x30);
+                ERROR_CODE(LWIP_E0189, 0x30);
                 return false;
             }
             alpn_offset += protocol_len;
@@ -3580,13 +3580,13 @@ bool tls_send_client_hello(
     }
     if (required_ext_len > 0xFFFFu)
     {
-        ERROR_CODE(0x2f);
+        ERROR_CODE(LWIP_E018A, 0x2f);
         return false;
     }
     required_len = HELLO_EXT_START + cs_extra + required_ext_len;
     if (required_len - 4 > 0xFFFFFFu)
     {
-        ERROR_CODE(0x2f);
+        ERROR_CODE(LWIP_E018B, 0x2f);
         return false;
     }
     if (!out)
@@ -3596,7 +3596,7 @@ bool tls_send_client_hello(
     }
     if (required_len > out_len)
     {
-        ERROR_CODE(required_len > 0xFFFF ? 0xFFFF : required_len);
+        ERROR_CODE(LWIP_E018C, required_len > 0xFFFF ? 0xFFFF : required_len);
         return false;
     }
 
@@ -3699,7 +3699,7 @@ bool tls_send_client_hello(
         bool psk_ok = false;
         if (!psk_tmp)
         {
-            ERROR_CODE(0x34);
+            ERROR_CODE(LWIP_E018D, 0x34);
             return false;
         }
 
@@ -3727,7 +3727,7 @@ bool tls_send_client_hello(
         out[offset++] = (uint8_t)(ctx->psk_identity.identity_len & 0xFF);
         if (offset + ctx->psk_identity.identity_len > out_len)
         {
-            ERROR_CODE(0x35);
+            ERROR_CODE(LWIP_E018E, 0x35);
             goto psk_cleanup;
         }
         memcpy(out + offset, ctx->psk_identity.identity, ctx->psk_identity.identity_len);
@@ -3760,7 +3760,7 @@ bool tls_send_client_hello(
         /* Calculate PSK binder */
         if (!tls_hkdf_extract(TLS_HASH_SHA256, NULL, 0, ctx->psk, 32, psk_tmp->early_secret))
         {
-            ERROR_CODE(0x36);
+            ERROR_CODE(LWIP_E018F, 0x36);
             goto psk_cleanup;
         }
 
@@ -3772,7 +3772,7 @@ bool tls_send_client_hello(
          * context field. */
         if (!tls_hash_context_init(&psk_tmp->hash_ctx, TLS_HASH_SHA256))
         {
-            ERROR_CODE(0x37);
+            ERROR_CODE(LWIP_E0190, 0x37);
             goto psk_cleanup;
         }
         tls_hash_digest(&psk_tmp->hash_ctx, psk_tmp->partial_hash);
@@ -3781,14 +3781,14 @@ bool tls_send_client_hello(
                                    binder_label, 10,
                                    psk_tmp->partial_hash, 32, psk_tmp->binder_key, 32))
         {
-            ERROR_CODE(0x38);
+            ERROR_CODE(LWIP_E0191, 0x38);
             goto psk_cleanup;
         }
 
         if (!tls_hkdf_expand_label(TLS_HASH_SHA256, psk_tmp->binder_key, 32,
                                    "finished", 8, NULL, 0, psk_tmp->finished_key, 32))
         {
-            ERROR_CODE(0x39);
+            ERROR_CODE(LWIP_E0192, 0x39);
             goto psk_cleanup;
         }
 
@@ -3829,7 +3829,7 @@ bool tls_send_client_hello(
         }
         else if (!tls_hash_context_init(&psk_tmp->hash_ctx, TLS_HASH_SHA256))
         {
-            ERROR_CODE(0x3a);
+            ERROR_CODE(LWIP_E0193, 0x3a);
             goto psk_cleanup;
         }
         tls_hash_update(&psk_tmp->hash_ctx, out, binder_offset);
@@ -3838,7 +3838,7 @@ bool tls_send_client_hello(
         /* Compute binder = HMAC(finished_key, partial_hash) */
         if (!tls_hmac_context_init(&psk_tmp->hmac_ctx, TLS_HASH_SHA256, psk_tmp->finished_key, 32))
         {
-            ERROR_CODE(0x3b);
+            ERROR_CODE(LWIP_E0194, 0x3b);
             goto psk_cleanup;
         }
         tls_hmac_update(&psk_tmp->hmac_ctx, psk_tmp->partial_hash, 32);
@@ -3847,7 +3847,7 @@ bool tls_send_client_hello(
         /* Write binder value */
         if (offset + 32 > out_len)
         {
-            ERROR_CODE(0x3c);
+            ERROR_CODE(LWIP_E0195, 0x3c);
             goto psk_cleanup;
         }
         memcpy(out + offset, psk_tmp->binder, 32);
@@ -3931,7 +3931,7 @@ bool tls_recv_server_hello(
 {
     if (!ctx || !data || ctx->state != TLS_STATE_CLIENT_HELLO_SENT)
     {
-        ERROR_CODE(0x3d);
+        ERROR_CODE(LWIP_E0196, 0x3d);
         return false;
     }
 
@@ -3946,7 +3946,7 @@ bool tls_recv_server_hello(
     if (offset == 0)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x3e);
+        ERROR_CODE(LWIP_E0197, 0x3e);
         return false;
     }
 
@@ -3956,7 +3956,7 @@ bool tls_recv_server_hello(
     if (offset + 2 > msg_end || data[offset] != 0x03 || data[offset + 1] != 0x03)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x3f);
+        ERROR_CODE(LWIP_E0198, 0x3f);
         return false;
     }
     offset += 2;
@@ -3965,7 +3965,7 @@ bool tls_recv_server_hello(
     if (offset + 32 > msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x40);
+        ERROR_CODE(LWIP_E0199, 0x40);
         return false;
     }
     memcpy(ctx->server_random, data + offset, 32);
@@ -3991,7 +3991,7 @@ bool tls_recv_server_hello(
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_UNEXPECTED_MESSAGE);
-                ERROR_CODE(0x41);
+                ERROR_CODE(LWIP_E019A, 0x41);
                 return false; /* state already ERROR from tls_send_alert */
             }
 
@@ -4000,20 +4000,20 @@ bool tls_recv_server_hello(
             if (hrr_offset >= msg_end)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x42);
+                ERROR_CODE(LWIP_E019B, 0x42);
                 return false;
             }
             uint8_t sid_len = data[hrr_offset++];
             if (hrr_offset + sid_len > msg_end)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x43);
+                ERROR_CODE(LWIP_E019C, 0x43);
                 return false;
             }
             if (sid_len != 0)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x43);
+                ERROR_CODE(LWIP_E019D, 0x43);
                 return false;
             }
             hrr_offset += sid_len;
@@ -4022,7 +4022,7 @@ bool tls_recv_server_hello(
             if (hrr_offset + 3 > msg_end)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x44);
+                ERROR_CODE(LWIP_E019E, 0x44);
                 return false;
             }
             uint16_t hrr_cipher_suite = ((uint16_t)data[hrr_offset] << 8) |
@@ -4033,7 +4033,7 @@ bool tls_recv_server_hello(
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_ILLEGAL_PARAMETER);
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x44);
+                ERROR_CODE(LWIP_E019F, 0x44);
                 return false;
             }
             ctx->cipher_suite = hrr_cipher_suite;
@@ -4045,7 +4045,7 @@ bool tls_recv_server_hello(
             if (hrr_offset + 2 > msg_end)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x45);
+                ERROR_CODE(LWIP_E01A0, 0x45);
                 return false;
             }
             uint16_t hrr_ext_len = ((uint16_t)data[hrr_offset] << 8) |
@@ -4055,7 +4055,7 @@ bool tls_recv_server_hello(
             if (hrr_ext_end != msg_end)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x46);
+                ERROR_CODE(LWIP_E01A1, 0x46);
                 return false;
             }
 
@@ -4074,7 +4074,7 @@ bool tls_recv_server_hello(
                 if (hrr_offset + elen > hrr_ext_end)
                 {
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x47);
+                    ERROR_CODE(LWIP_E01A2, 0x47);
                     return false;
                 }
                 if (etype == TLS_EXT_KEY_SHARE)
@@ -4083,7 +4083,7 @@ bool tls_recv_server_hello(
                     if (hrr_key_share || elen != 2)
                     {
                         ctx->state = TLS_STATE_ERROR;
-                        ERROR_CODE(0x48);
+                        ERROR_CODE(LWIP_E01A3, 0x48);
                         return false;
                     }
                     hrr_key_share = true;
@@ -4096,7 +4096,7 @@ bool tls_recv_server_hello(
                     if (hrr_cookie_seen || elen < 3)
                     {
                         ctx->state = TLS_STATE_ERROR;
-                        ERROR_CODE(0x49);
+                        ERROR_CODE(LWIP_E01A4, 0x49);
                         return false;
                     }
                     uint16_t clen = ((uint16_t)data[hrr_offset] << 8) |
@@ -4104,7 +4104,7 @@ bool tls_recv_server_hello(
                     if ((size_t)clen + 2u != elen)
                     {
                         ctx->state = TLS_STATE_ERROR;
-                        ERROR_CODE(0x4a);
+                        ERROR_CODE(LWIP_E01A5, 0x4a);
                         return false;
                     }
                     cookie_data = data + hrr_offset + 2;
@@ -4117,7 +4117,7 @@ bool tls_recv_server_hello(
                         data[hrr_offset + 1] != 0x04)
                     {
                         ctx->state = TLS_STATE_ERROR;
-                        ERROR_CODE(0x4a);
+                        ERROR_CODE(LWIP_E01A6, 0x4a);
                         return false;
                     }
                     hrr_version = true;
@@ -4137,7 +4137,7 @@ bool tls_recv_server_hello(
                 (!hrr_key_share && !hrr_cookie_seen))
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x4a);
+                ERROR_CODE(LWIP_E01A7, 0x4a);
                 return false;
             }
 
@@ -4151,7 +4151,7 @@ bool tls_recv_server_hello(
                 {
                     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                    TLS_ALERT_ILLEGAL_PARAMETER);
-                    ERROR_CODE(0x4b);
+                    ERROR_CODE(LWIP_E01A8, 0x4b);
                     return false;
                 }
             }
@@ -4168,7 +4168,7 @@ bool tls_recv_server_hello(
                 if (!synth)
                 {
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x4c);
+                    ERROR_CODE(LWIP_E01A9, 0x4c);
                     return false;
                 }
 
@@ -4181,7 +4181,7 @@ bool tls_recv_server_hello(
                     {
                         tls_scratch_free(synth, synth_cap);
                         ctx->state = TLS_STATE_ERROR;
-                        ERROR_CODE(0x4c);
+                        ERROR_CODE(LWIP_E01AA, 0x4c);
                         return false;
                     }
                     tls_hash_update(ctx->transcript_hash, ctx->client_hello_buf,
@@ -4194,7 +4194,7 @@ bool tls_recv_server_hello(
                 {
                     tls_scratch_free(synth, synth_cap);
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x4c);
+                    ERROR_CODE(LWIP_E01AB, 0x4c);
                     return false;
                 }
                 ctx->transcript_hash_algo = algorithm;
@@ -4225,7 +4225,7 @@ bool tls_recv_server_hello(
                 if (!ctx->hrr_cookie)
                 {
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x4d);
+                    ERROR_CODE(LWIP_E01AC, 0x4d);
                     return false;
                 }
                 memcpy(ctx->hrr_cookie, cookie_data, cookie_len);
@@ -4243,14 +4243,14 @@ bool tls_recv_server_hello(
     if (offset >= msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x4e);
+        ERROR_CODE(LWIP_E01AD, 0x4e);
         return false;
     }
     uint8_t session_id_len = data[offset++];
     if (session_id_len != 0 || offset + session_id_len > msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x4f);
+        ERROR_CODE(LWIP_E01AE, 0x4f);
         return false;
     }
     offset += session_id_len;
@@ -4259,7 +4259,7 @@ bool tls_recv_server_hello(
     if (offset + 2 > msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x50);
+        ERROR_CODE(LWIP_E01AF, 0x50);
         return false;
     }
     uint16_t cipher_suite = (data[offset] << 8) | data[offset + 1];
@@ -4270,7 +4270,7 @@ bool tls_recv_server_hello(
     {
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x51);
+        ERROR_CODE(LWIP_E01B0, 0x51);
         return false;
     }
     ctx->cipher_suite = cipher_suite;
@@ -4281,7 +4281,7 @@ bool tls_recv_server_hello(
     if (offset >= msg_end || data[offset++] != 0x00)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x52);
+        ERROR_CODE(LWIP_E01B1, 0x52);
         return false;
     }
 
@@ -4289,7 +4289,7 @@ bool tls_recv_server_hello(
     if (offset + 2 > msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x53);
+        ERROR_CODE(LWIP_E01B2, 0x53);
         return false;
     }
     uint16_t ext_len = (data[offset] << 8) | data[offset + 1];
@@ -4299,7 +4299,7 @@ bool tls_recv_server_hello(
     if (ext_end != msg_end)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x54);
+        ERROR_CODE(LWIP_E01B3, 0x54);
         return false;
     }
 
@@ -4308,7 +4308,7 @@ bool tls_recv_server_hello(
         if (offset + 4 > ext_end)
         {
             ctx->state = TLS_STATE_ERROR;
-            ERROR_CODE(0x55);
+            ERROR_CODE(LWIP_E01B4, 0x55);
             return false;
         }
 
@@ -4319,7 +4319,7 @@ bool tls_recv_server_hello(
         if (offset + ext_data_len > ext_end)
         {
             ctx->state = TLS_STATE_ERROR;
-            ERROR_CODE(0x56);
+            ERROR_CODE(LWIP_E01B5, 0x56);
             return false;
         }
 
@@ -4330,13 +4330,13 @@ bool tls_recv_server_hello(
             if (found_supported_versions || ext_data_len != 2)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x57);
+                ERROR_CODE(LWIP_E01B6, 0x57);
                 return false;
             }
             if (data[offset] != 0x03 || data[offset + 1] != 0x04)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x58);
+                ERROR_CODE(LWIP_E01B7, 0x58);
                 return false;
             }
             found_supported_versions = true;
@@ -4348,7 +4348,7 @@ bool tls_recv_server_hello(
             if (ctx->ecdhe_negotiated || ext_data_len < 4)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x59);
+                ERROR_CODE(LWIP_E01B8, 0x59);
                 return false;
             }
             uint16_t group = (data[offset] << 8) | data[offset + 1];
@@ -4356,7 +4356,7 @@ bool tls_recv_server_hello(
             if (ext_data_len != (size_t)(4 + ke_len))
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5a);
+                ERROR_CODE(LWIP_E01B9, 0x5a);
                 return false;
             }
             if (group == TLS_NAMED_GROUP_X25519)
@@ -4368,7 +4368,7 @@ bool tls_recv_server_hello(
                     ke_len != 32)
                 {
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x5a);
+                    ERROR_CODE(LWIP_E01BA, 0x5a);
                     return false;
                 }
                 /* Any speculative P-256 public-share job is now unused. */
@@ -4397,7 +4397,7 @@ bool tls_recv_server_hello(
                 tls_crypto_guard_disable();
                 if (!x25519_ok)
                 {
-                    ERROR();
+                    ERROR(LWIP_E01BB);
                     tls_secure_memzero(ctx->ecdhe_private,
                                        sizeof(ctx->ecdhe_private));
                     tls_secure_memzero(ctx->ecdhe_shared,
@@ -4405,7 +4405,7 @@ bool tls_recv_server_hello(
                     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                    TLS_ALERT_ILLEGAL_PARAMETER);
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x5c);
+                    ERROR_CODE(LWIP_E01BC, 0x5c);
                     return false;
                 }
                 /* Securely erase X25519 private key immediately */
@@ -4420,14 +4420,14 @@ bool tls_recv_server_hello(
                     !(ctx->keyshare_ready & TLS_KEYSHARE_P256_READY))
                 {
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x5a);
+                    ERROR_CODE(LWIP_E01BD, 0x5a);
                     return false;
                 }
                 /* P-256 uncompressed point: 0x04 || x(32) || y(32) = 65 bytes */
                 if (ke_len != 65 || data[offset + 4] != 0x04)
                 {
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x5a);
+                    ERROR_CODE(LWIP_E01BE, 0x5a);
                     return false;
                 }
                 memcpy(ctx->ecdhe_peer, data + offset + 4, 65);
@@ -4446,7 +4446,7 @@ bool tls_recv_server_hello(
                 tls_crypto_guard_disable();
                 if (!p256_ok)
                 {
-                    ERROR();
+                    ERROR(LWIP_E01BF);
                     tls_secure_memzero(ctx->p256_private,
                                        sizeof(ctx->p256_private));
                     tls_secure_memzero(ctx->ecdhe_shared,
@@ -4454,7 +4454,7 @@ bool tls_recv_server_hello(
                     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                    TLS_ALERT_ILLEGAL_PARAMETER);
                     ctx->state = TLS_STATE_ERROR;
-                    ERROR_CODE(0x5c);
+                    ERROR_CODE(LWIP_E01C0, 0x5c);
                     return false;
                 }
                 /* Securely erase P-256 private key immediately */
@@ -4468,7 +4468,7 @@ bool tls_recv_server_hello(
             {
                 /* Server selected a group we didn't offer. */
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5a);
+                ERROR_CODE(LWIP_E01C1, 0x5a);
                 return false;
             }
             ctx->ecdhe_negotiated = true;
@@ -4481,14 +4481,14 @@ bool tls_recv_server_hello(
             {
                 /* Server selected a PSK identity we did not offer. */
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5c);
+                ERROR_CODE(LWIP_E01C2, 0x5c);
                 return false;
             }
             /* Extract selected PSK identity (2 bytes, should be 0 for first PSK) */
             if (ext_data_len != 2)
             {
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5d);
+                ERROR_CODE(LWIP_E01C3, 0x5d);
                 return false;
             }
             uint16_t selected_identity = (data[offset] << 8) | data[offset + 1];
@@ -4496,7 +4496,7 @@ bool tls_recv_server_hello(
             {
                 /* Server selected a PSK identity we didn't offer */
                 ctx->state = TLS_STATE_ERROR;
-                ERROR_CODE(0x5e);
+                ERROR_CODE(LWIP_E01C4, 0x5e);
                 return false;
             }
             found_psk = true;
@@ -4518,7 +4518,7 @@ bool tls_recv_server_hello(
     if (!found_supported_versions || (!found_psk && !ctx->ecdhe_negotiated))
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x5f);
+        ERROR_CODE(LWIP_E01C5, 0x5f);
         return false;
     }
 
@@ -4538,7 +4538,7 @@ bool tls_recv_server_hello(
     {
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_HANDSHAKE_FAILURE);
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0xba);
+        ERROR_CODE(LWIP_E01C6, 0xba);
         return false;
     }
     if (ctx->transcript_hash)
@@ -4568,13 +4568,13 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
 {
     if (!ctx || !w)
     {
-        ERROR_CODE(0x60);
+        ERROR_CODE(LWIP_E01C7, 0x60);
         return false;
     }
     if (ctx->state != TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x61);
+        ERROR_CODE(LWIP_E01C8, 0x61);
         return false;
     }
     /* PSK-authenticated handshakes, including PSK+DHE, MUST NOT send
@@ -4582,19 +4582,19 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
     if (ctx->psk_mode)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x62);
+        ERROR_CODE(LWIP_E01C9, 0x62);
         return false;
     }
     if (w->state != CW_DONE)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x63);
+        ERROR_CODE(LWIP_E01CA, 0x63);
         return false;
     }
     if (!w->chain_validated)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x64);
+        ERROR_CODE(LWIP_E01CB, 0x64);
         return false;
     }
 
@@ -4603,7 +4603,7 @@ static bool tls_recv_certificate_streamed(struct tls_handshake_context *ctx,
      * every job has passed (see tls_dispatch_inner_handshake). */
     if (!tls_cert_job_enqueue(w, NULL))
     {
-        ERROR_CODE(0x65);
+        ERROR_CODE(LWIP_E01CC, 0x65);
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
@@ -4641,13 +4641,13 @@ static bool tls_recv_encrypted_extensions(
 {
     if (!ctx || !data || data_len < 6)
     {
-        ERROR_CODE(0x68);
+        ERROR_CODE(LWIP_E01CD, 0x68);
         return false;
     }
     if (ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x69);
+        ERROR_CODE(LWIP_E01CE, 0x69);
         return false;
     }
 
@@ -4657,14 +4657,14 @@ static bool tls_recv_encrypted_extensions(
                                                &msg_len);
     if (offset == 0)
     {
-        ERROR_CODE(0x6a);
+        ERROR_CODE(LWIP_E01CF, 0x6a);
         return false;
     }
 
     /* Parse extensions length (2 bytes) */
     if (offset + 2 > data_len)
     {
-        ERROR_CODE(0x6b);
+        ERROR_CODE(LWIP_E01D0, 0x6b);
         return false;
     }
     size_t ext_len = ((size_t)data[offset] << 8) | (size_t)data[offset + 1];
@@ -4673,7 +4673,7 @@ static bool tls_recv_encrypted_extensions(
     /* Verify extensions fit in message */
     if (offset + ext_len != data_len || ext_len != msg_len - 2u)
     {
-        ERROR_CODE(0x6c);
+        ERROR_CODE(LWIP_E01D1, 0x6c);
         return false;
     }
 
@@ -4696,7 +4696,7 @@ static bool tls_recv_encrypted_extensions(
 
         if (ext_offset + ext_data_len > ext_len)
         {
-            ERROR_CODE(0x6d);
+            ERROR_CODE(LWIP_E01D2, 0x6d);
             return false;
         }
 
@@ -4708,12 +4708,12 @@ static bool tls_recv_encrypted_extensions(
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_UNSUPPORTED_EXTENSION);
-                ERROR_CODE(0x6e);
+                ERROR_CODE(LWIP_E01D3, 0x6e);
                 return false;
             }
             if (seen_server_name || ext_data_len != 0)
             {
-                ERROR_CODE(0x6f);
+                ERROR_CODE(LWIP_E01D4, 0x6f);
                 return false;
             }
             seen_server_name = true;
@@ -4727,7 +4727,7 @@ static bool tls_recv_encrypted_extensions(
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_ILLEGAL_PARAMETER);
-                ERROR_CODE(0x74);
+                ERROR_CODE(LWIP_E01D5, 0x74);
                 return false;
             }
             uint16_t server_limit = ((uint16_t)ext_data[0] << 8) | ext_data[1];
@@ -4735,7 +4735,7 @@ static bool tls_recv_encrypted_extensions(
             {
                 tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL,
                                TLS_ALERT_ILLEGAL_PARAMETER);
-                ERROR_CODE(0x74);
+                ERROR_CODE(LWIP_E01D6, 0x74);
                 return false;
             }
             ctx->peer_record_size_limit = server_limit;
@@ -4761,7 +4761,7 @@ static bool tls_recv_encrypted_extensions(
             if (selected_len == 0 || list_len != (uint16_t)(selected_len + 1u) ||
                 ext_data_len != (uint16_t)(list_len + 2u))
             {
-                ERROR_CODE(0x70);
+                ERROR_CODE(LWIP_E01D7, 0x70);
                 return false;
             }
             while (offered_offset < ctx->alpn_protocols_len)
@@ -4770,7 +4770,7 @@ static bool tls_recv_encrypted_extensions(
                 if (offered_len == 0 ||
                     offered_len > ctx->alpn_protocols_len - offered_offset)
                 {
-                    ERROR_CODE(0x71);
+                    ERROR_CODE(LWIP_E01D8, 0x71);
                     return false;
                 }
                 if (offered_len == selected_len &&
@@ -4796,14 +4796,14 @@ static bool tls_recv_encrypted_extensions(
             uint16_t groups_len;
             if (seen_groups || ext_data_len < 4)
             {
-                ERROR_CODE(0x72);
+                ERROR_CODE(LWIP_E01D9, 0x72);
                 return false;
             }
             groups_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
             if (groups_len < 2 || (groups_len & 1u) != 0 ||
                 groups_len != (uint16_t)(ext_data_len - 2u))
             {
-                ERROR_CODE(0x73);
+                ERROR_CODE(LWIP_E01DA, 0x73);
                 return false;
             }
             /* This is the server's complete supported-group preference list,
@@ -4824,7 +4824,7 @@ static bool tls_recv_encrypted_extensions(
                         ext_data[previous + 1];
                     if (previous_group == group)
                     {
-                        ERROR_CODE(0x74);
+                        ERROR_CODE(LWIP_E01DB, 0x74);
                         return false;
                     }
                 }
@@ -4843,7 +4843,7 @@ static bool tls_recv_encrypted_extensions(
     }
     if (ext_offset != ext_len)
     {
-        ERROR_CODE(0x6e);
+        ERROR_CODE(LWIP_E01DC, 0x6e);
         return false;
     }
 
@@ -4891,7 +4891,7 @@ static bool tls_recv_certificate_request(
 
     if (!ctx || !data || data_len < 7)
     {
-        ERROR_CODE(0x6f);
+        ERROR_CODE(LWIP_E01DD, 0x6f);
         return false;
     }
     if (ctx->state != TLS_STATE_ENCRYPTED_EXTENSIONS_RECEIVED ||
@@ -4899,7 +4899,7 @@ static bool tls_recv_certificate_request(
     {
         /* Wrong point in the flight, post-handshake, or a second request. */
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
-        ERROR_CODE(0x70);
+        ERROR_CODE(LWIP_E01DE, 0x70);
         return false;
     }
     /* A server authenticating this main handshake with a selected PSK is not
@@ -4907,7 +4907,7 @@ static bool tls_recv_certificate_request(
     if (ctx->psk_mode)
     {
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_UNEXPECTED_MESSAGE);
-        ERROR_CODE(0x71);
+        ERROR_CODE(LWIP_E01DF, 0x71);
         return false;
     }
 
@@ -4916,25 +4916,25 @@ static bool tls_recv_certificate_request(
                                         &msg_len);
     if (offset == 0)
     {
-        ERROR_CODE(0x71);
+        ERROR_CODE(LWIP_E01E0, 0x71);
         return false;
     }
     msg_end = offset + msg_len;
     if (msg_end != data_len)
     {
-        ERROR_CODE(0x72);
+        ERROR_CODE(LWIP_E01E1, 0x72);
         return false;
     }
 
     if (offset + 1 > msg_end)
     {
-        ERROR_CODE(0x72);
+        ERROR_CODE(LWIP_E01E2, 0x72);
         return false;
     }
     request_context_len = data[offset++];
     if (offset + request_context_len > msg_end)
     {
-        ERROR_CODE(0x73);
+        ERROR_CODE(LWIP_E01E3, 0x73);
         return false;
     }
     /* A CertificateRequest sent in the main handshake has an empty context.
@@ -4943,21 +4943,21 @@ static bool tls_recv_certificate_request(
     if (request_context_len != 0)
     {
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
-        ERROR_CODE(0x74);
+        ERROR_CODE(LWIP_E01E4, 0x74);
         return false;
     }
     offset += request_context_len;
 
     if (offset + 2 > msg_end)
     {
-        ERROR_CODE(0x74);
+        ERROR_CODE(LWIP_E01E5, 0x74);
         return false;
     }
     ext_len = ((size_t)data[offset] << 8) | (size_t)data[offset + 1];
     offset += 2;
     if (offset + ext_len != msg_end)
     {
-        ERROR_CODE(0x75);
+        ERROR_CODE(LWIP_E01E6, 0x75);
         return false;
     }
 
@@ -4977,7 +4977,7 @@ static bool tls_recv_certificate_request(
 
         if (ext_offset + ext_data_len > ext_len)
         {
-            ERROR_CODE(0x76);
+            ERROR_CODE(LWIP_E01E7, 0x76);
             return false;
         }
 
@@ -4993,7 +4993,7 @@ static bool tls_recv_certificate_request(
                 (uint16_t)data[offset + previous_offset + 3];
             if (previous_type == ext_type)
             {
-                ERROR_CODE(0x77);
+                ERROR_CODE(LWIP_E01E8, 0x77);
                 return false;
             }
             previous_offset += 4u + previous_len;
@@ -5006,14 +5006,14 @@ static bool tls_recv_certificate_request(
             uint16_t algorithms_len;
             if (ext_data_len < 4)
             {
-                ERROR_CODE(0x78);
+                ERROR_CODE(LWIP_E01E9, 0x78);
                 return false;
             }
             algorithms_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
             if (algorithms_len < 2 || (algorithms_len & 1u) != 0 ||
                 algorithms_len != (uint16_t)(ext_data_len - 2u))
             {
-                ERROR_CODE(0x79);
+                ERROR_CODE(LWIP_E01EA, 0x79);
                 return false;
             }
             if (ext_type == TLS_EXT_SIGNATURE_ALGORITHMS)
@@ -5036,13 +5036,13 @@ static bool tls_recv_certificate_request(
             certificate_authorities_seen = true;
             if (ext_data_len < 5)
             {
-                ERROR_CODE(0x7a);
+                ERROR_CODE(LWIP_E01EB, 0x7a);
                 return false;
             }
             names_len = ((uint16_t)ext_data[0] << 8) | ext_data[1];
             if (names_len < 3 || names_len != (uint16_t)(ext_data_len - 2u))
             {
-                ERROR_CODE(0x7b);
+                ERROR_CODE(LWIP_E01EC, 0x7b);
                 return false;
             }
             while (names_offset < ext_data_len)
@@ -5139,13 +5139,13 @@ static bool tls_recv_certificate_request(
     }
     if (ext_offset != ext_len)
     {
-        ERROR_CODE(0x77);
+        ERROR_CODE(LWIP_E01ED, 0x77);
         return false;
     }
     /* signature_algorithms is mandatory in a TLS 1.3 CertificateRequest. */
     if (!found_signature_algorithms)
     {
-        ERROR_CODE(0x7a);
+        ERROR_CODE(LWIP_E01EE, 0x7a);
         return false;
     }
 
@@ -5201,14 +5201,14 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_RSA ||
         !sig || sig_len == 0)
     {
-        ERROR_CODE(0x78);
+        ERROR_CODE(LWIP_E01EF, 0x78);
         return false;
     }
 
     const struct tls_rsa_key *rsa = &ctx->leaf_pubkey.rsa;
     if (!rsa->modulus || rsa->mod_len == 0)
     {
-        ERROR_CODE(0x79);
+        ERROR_CODE(LWIP_E01F0, 0x79);
         return false;
     }
 
@@ -5216,7 +5216,7 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
      * exactly match the modulus size in bytes. */
     if (sig_len != rsa->mod_len)
     {
-        ERROR_CODE(0x7a);
+        ERROR_CODE(LWIP_E01F1, 0x7a);
         return false;
     }
 
@@ -5225,7 +5225,7 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
         (ctx->hash_len != TLS_SHA256_DIGEST_LEN &&
          ctx->hash_len != TLS_SHA384_DIGEST_LEN))
     {
-        ERROR_CODE(0x7b);
+        ERROR_CODE(LWIP_E01F2, 0x7b);
         return false;
     }
 
@@ -5233,20 +5233,20 @@ static bool tls_certverify_rsa_pss_sha256(struct tls_handshake_context *ctx,
     if (rsa->mod_len > RSA_TRANSIENT_SIZE ||
         rsa->mod_len < RSA_MODULUS_MIN_SUPPORTED)
     {
-        ERROR_CODE(0x7d);
+        ERROR_CODE(LWIP_E01F3, 0x7d);
         return false;
     }
 
     cv = tls_scratch_alloc(sizeof(*cv));
     if (!cv)
     {
-        ERROR_CODE(0x7c);
+        ERROR_CODE(LWIP_E01F4, 0x7c);
         return false;
     }
     if (!transcript_hash_digest(ctx->transcript_hash, cv->transcript) ||
         !tls_hash_context_init(&cv->hash_ctx, TLS_HASH_SHA256))
     {
-        ERROR_CODE(0x7c);
+        ERROR_CODE(LWIP_E01F5, 0x7c);
         goto cleanup;
     }
     tls_hash_update(&cv->hash_ctx, spaces, sizeof(spaces));
@@ -5310,13 +5310,13 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P256 ||
         !sig || sig_len == 0)
     {
-        ERROR_CODE(0x85);
+        ERROR_CODE(LWIP_E01F6, 0x85);
         return false;
     }
 
     if (!ctx->leaf_pubkey.ec.pub || ctx->leaf_pubkey.ec.len != 65)
     {
-        ERROR_CODE(0x86);
+        ERROR_CODE(LWIP_E01F7, 0x86);
         return false;
     }
 
@@ -5325,20 +5325,20 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
         (ctx->hash_len != TLS_SHA256_DIGEST_LEN &&
          ctx->hash_len != TLS_SHA384_DIGEST_LEN))
     {
-        ERROR_CODE(0x87);
+        ERROR_CODE(LWIP_E01F8, 0x87);
         return false;
     }
 
     cv = tls_scratch_alloc(sizeof(*cv));
     if (!cv)
     {
-        ERROR_CODE(0x88);
+        ERROR_CODE(LWIP_E01F9, 0x88);
         return false;
     }
     if (!transcript_hash_digest(ctx->transcript_hash, cv->transcript) ||
         !tls_hash_context_init(&cv->hash_ctx, TLS_HASH_SHA256))
     {
-        ERROR_CODE(0x88);
+        ERROR_CODE(LWIP_E01FA, 0x88);
         goto done;
     }
     tls_hash_update(&cv->hash_ctx, spaces, sizeof(spaces));
@@ -5359,7 +5359,7 @@ static bool tls_certverify_ecdsa_p256_sha256(struct tls_handshake_context *ctx,
      * tls_ecdsa_parse_int (x509.c). */
     if (!tls_ecdsa_sig_rs(sig, sig_len, cv->rs))
     {
-        ERROR_CODE(0x89);
+        ERROR_CODE(LWIP_E01FB, 0x89);
         goto done;
     }
 
@@ -5399,13 +5399,13 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
     if (!ctx || ctx->leaf_pubkey.type != TLS_KEY_TYPE_EC_P384 ||
         !sig || sig_len == 0)
     {
-        ERROR_CODE(0x8a);
+        ERROR_CODE(LWIP_E01FC, 0x8a);
         return false;
     }
 
     if (!ctx->leaf_pubkey.ec.pub || ctx->leaf_pubkey.ec.len != 97)
     {
-        ERROR_CODE(0x8b);
+        ERROR_CODE(LWIP_E01FD, 0x8b);
         return false;
     }
 
@@ -5413,20 +5413,20 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
         (ctx->hash_len != TLS_SHA256_DIGEST_LEN &&
          ctx->hash_len != TLS_SHA384_DIGEST_LEN))
     {
-        ERROR_CODE(0x8c);
+        ERROR_CODE(LWIP_E01FE, 0x8c);
         return false;
     }
 
     cv = tls_scratch_alloc(sizeof(*cv));
     if (!cv)
     {
-        ERROR_CODE(0x8d);
+        ERROR_CODE(LWIP_E01FF, 0x8d);
         return false;
     }
     if (!transcript_hash_digest(ctx->transcript_hash, cv->transcript) ||
         !tls_hash_context_init(&cv->hash_ctx, TLS_HASH_SHA384))
     {
-        ERROR_CODE(0x8d);
+        ERROR_CODE(LWIP_E0200, 0x8d);
         goto done;
     }
     tls_hash_update(&cv->hash_ctx, spaces, sizeof(spaces));
@@ -5444,7 +5444,7 @@ static bool tls_certverify_ecdsa_p384_sha384(struct tls_handshake_context *ctx,
 
     if (!tls_ecdsa_sig_rs96(sig, sig_len, cv->rs))
     {
-        ERROR_CODE(0x8e);
+        ERROR_CODE(LWIP_E0201, 0x8e);
         goto done;
     }
 
@@ -5474,13 +5474,13 @@ static bool tls_recv_certificate_verify(
 {
     if (!ctx || !data || data_len < 8)
     {
-        ERROR_CODE(0x7e);
+        ERROR_CODE(LWIP_E0202, 0x7e);
         return false;
     }
     if (ctx->state != TLS_STATE_CERTIFICATE_RECEIVED)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x7f);
+        ERROR_CODE(LWIP_E0203, 0x7f);
         return false;
     }
 
@@ -5490,14 +5490,14 @@ static bool tls_recv_certificate_verify(
                                                &msg_len);
     if (offset == 0)
     {
-        ERROR_CODE(0x80);
+        ERROR_CODE(LWIP_E0204, 0x80);
         return false;
     }
 
     /* Signature algorithm (2 bytes). */
     if (offset + 2 > data_len)
     {
-        ERROR_CODE(0x81);
+        ERROR_CODE(LWIP_E0205, 0x81);
         return false;
     }
     uint16_t sig_alg = ((uint16_t)data[offset] << 8) | (uint16_t)data[offset + 1];
@@ -5506,14 +5506,14 @@ static bool tls_recv_certificate_verify(
     /* Signature length (2 bytes) and bounds. */
     if (offset + 2 > data_len)
     {
-        ERROR_CODE(0x82);
+        ERROR_CODE(LWIP_E0206, 0x82);
         return false;
     }
     size_t sig_len = ((size_t)data[offset] << 8) | (size_t)data[offset + 1];
     offset += 2;
     if (offset + sig_len > data_len || offset + sig_len != 4 + msg_len)
     {
-        ERROR_CODE(0x83);
+        ERROR_CODE(LWIP_E0207, 0x83);
         return false;
     }
 
@@ -5521,7 +5521,7 @@ static bool tls_recv_certificate_verify(
     {
         /* No leaf cert in hand (e.g. pure-PSK handshake fluke).
          * CertificateVerify without a leaf is unverifiable; fail closed. */
-        ERROR();
+        ERROR(LWIP_E0208);
         ctx->state = TLS_STATE_ERROR;
         return false;
     }
@@ -5546,10 +5546,10 @@ static bool tls_recv_certificate_verify(
 
     if (!sig_ok)
     {
-        ERROR();
+        ERROR(LWIP_E0209);
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(0x84);
+        ERROR_CODE(LWIP_E020A, 0x84);
         return false;
     }
 
@@ -5606,7 +5606,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
 {
     if (!ctx || ctx->state != TLS_STATE_SERVER_HELLO_RECEIVED)
     {
-        ERROR();
+        ERROR(LWIP_E020B);
         return false;
     }
 
@@ -5620,7 +5620,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         (klen != 16 && klen != 32) ||
         (ctx->psk_mode && hash_alg != TLS_HASH_SHA256))
     {
-        ERROR_CODE(0x85);
+        ERROR_CODE(LWIP_E020C, 0x85);
         return false;
     }
 
@@ -5636,7 +5636,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
     if (!sec)
     {
-        ERROR_CODE(0x85);
+        ERROR_CODE(LWIP_E020D, 0x85);
         return false;
     }
 
@@ -5654,7 +5654,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         {
             tls_secure_memzero(sec, sizeof(*sec));
             mem_buffer_custom_free(sec);
-            ERROR_CODE(0x85);
+            ERROR_CODE(LWIP_E020E, 0x85);
             return false;
         }
     }
@@ -5663,7 +5663,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     if (!tls_hash_context_init(&sec->hash_ctx, hash_alg))
     {
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x86);
+        ERROR_CODE(LWIP_E020F, 0x86);
         return false;
     }
     tls_hash_digest(&sec->hash_ctx, sec->empty_hash);
@@ -5676,7 +5676,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x87);
+        ERROR_CODE(LWIP_E0210, 0x87);
         return false;
     }
 
@@ -5694,7 +5694,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
         {
             tls_secure_memzero(sec, sizeof(*sec));
             mem_buffer_custom_free(sec);
-            ERROR_CODE(0x88);
+            ERROR_CODE(LWIP_E0211, 0x88);
             return false;
         }
         /* Securely erase shared secret after use */
@@ -5714,7 +5714,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xb5);
+        ERROR_CODE(LWIP_E0212, 0xb5);
         return false;
     }
 
@@ -5728,7 +5728,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x89);
+        ERROR_CODE(LWIP_E0213, 0x89);
         return false;
     }
 
@@ -5742,7 +5742,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x8a);
+        ERROR_CODE(LWIP_E0214, 0x8a);
         return false;
     }
 
@@ -5761,7 +5761,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
                                "key", 3, NULL, 0,
                                ctx->keys.client_handshake_key, klen))
     {
-        ERROR_CODE(0x8b);
+        ERROR_CODE(LWIP_E0215, 0x8b);
         return false;
     }
 
@@ -5770,7 +5770,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
                                "iv", 2, NULL, 0,
                                ctx->keys.client_handshake_iv, 12))
     {
-        ERROR_CODE(0x8c);
+        ERROR_CODE(LWIP_E0216, 0x8c);
         return false;
     }
 
@@ -5780,7 +5780,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
                                "key", 3, NULL, 0,
                                ctx->keys.server_handshake_key, klen))
     {
-        ERROR_CODE(0x8d);
+        ERROR_CODE(LWIP_E0217, 0x8d);
         return false;
     }
 
@@ -5789,7 +5789,7 @@ bool tls_derive_handshake_keys(struct tls_handshake_context *ctx)
                                "iv", 2, NULL, 0,
                                ctx->keys.server_handshake_iv, 12))
     {
-        ERROR_CODE(0x8e);
+        ERROR_CODE(LWIP_E0218, 0x8e);
         return false;
     }
 
@@ -5840,7 +5840,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
 {
     if (!ctx)
     {
-        ERROR();
+        ERROR(LWIP_E0219);
         return false;
     }
 
@@ -5851,7 +5851,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN) ||
         (klen != 16 && klen != 32))
     {
-        ERROR_CODE(0x8f);
+        ERROR_CODE(LWIP_E021A, 0x8f);
         return false;
     }
 
@@ -5866,7 +5866,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
     if (!sec)
     {
-        ERROR_CODE(0x8f);
+        ERROR_CODE(LWIP_E021B, 0x8f);
         return false;
     }
 
@@ -5874,7 +5874,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     if (!tls_hash_context_init(&sec->hash_ctx, hash_alg))
     {
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x8f);
+        ERROR_CODE(LWIP_E021C, 0x8f);
         return false;
     }
     tls_hash_digest(&sec->hash_ctx, sec->empty_hash);
@@ -5887,7 +5887,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x90);
+        ERROR_CODE(LWIP_E021D, 0x90);
         return false;
     }
 
@@ -5900,7 +5900,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x91);
+        ERROR_CODE(LWIP_E021E, 0x91);
         return false;
     }
     memcpy(ctx->keys.master_secret, sec->master_secret, hlen);
@@ -5914,7 +5914,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xb6);
+        ERROR_CODE(LWIP_E021F, 0xb6);
         return false;
     }
 
@@ -5928,7 +5928,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x92);
+        ERROR_CODE(LWIP_E0220, 0x92);
         return false;
     }
 
@@ -5942,7 +5942,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x93);
+        ERROR_CODE(LWIP_E0221, 0x93);
         return false;
     }
 
@@ -5958,7 +5958,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
                                "key", 3, NULL, 0,
                                ctx->keys.client_application_key, klen))
     {
-        ERROR_CODE(0x94);
+        ERROR_CODE(LWIP_E0222, 0x94);
         return false;
     }
 
@@ -5967,7 +5967,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
                                "iv", 2, NULL, 0,
                                ctx->keys.client_application_iv, 12))
     {
-        ERROR_CODE(0x95);
+        ERROR_CODE(LWIP_E0223, 0x95);
         return false;
     }
 
@@ -5977,7 +5977,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
                                "key", 3, NULL, 0,
                                ctx->keys.server_application_key, klen))
     {
-        ERROR_CODE(0x96);
+        ERROR_CODE(LWIP_E0224, 0x96);
         return false;
     }
 
@@ -5986,7 +5986,7 @@ bool tls_derive_application_keys(struct tls_handshake_context *ctx)
                                "iv", 2, NULL, 0,
                                ctx->keys.server_application_iv, 12))
     {
-        ERROR_CODE(0x97);
+        ERROR_CODE(LWIP_E0225, 0x97);
         return false;
     }
 
@@ -6035,7 +6035,7 @@ bool tls_send_finished(
 {
     if (!ctx || !out || !written)
     {
-        ERROR_CODE(0x98);
+        ERROR_CODE(LWIP_E0226, 0x98);
         return false;
     }
 
@@ -6044,12 +6044,12 @@ bool tls_send_finished(
     if ((hash_alg != TLS_HASH_SHA256 && hash_alg != TLS_HASH_SHA384) ||
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN))
     {
-        ERROR_CODE(0x99);
+        ERROR_CODE(LWIP_E0227, 0x99);
         return false;
     }
     if (out_len < 4 + hlen)
     {
-        ERROR_CODE(0x99);
+        ERROR_CODE(LWIP_E0228, 0x99);
         return false;
     }
 
@@ -6063,7 +6063,7 @@ bool tls_send_finished(
     } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
     if (!sec)
     {
-        ERROR_CODE(0x98);
+        ERROR_CODE(LWIP_E0229, 0x98);
         return false;
     }
     uint8_t finished_header[4] = {
@@ -6089,7 +6089,7 @@ bool tls_send_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x9a);
+        ERROR_CODE(LWIP_E022A, 0x9a);
         return false;
     }
 
@@ -6102,7 +6102,7 @@ bool tls_send_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xb7);
+        ERROR_CODE(LWIP_E022B, 0xb7);
         return false;
     }
 
@@ -6111,7 +6111,7 @@ bool tls_send_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0x9b);
+        ERROR_CODE(LWIP_E022C, 0x9b);
         return false;
     }
     tls_hmac_update(&sec->hmac_ctx, sec->transcript_hash, hlen);
@@ -6144,7 +6144,7 @@ bool tls_send_finished(
                                ctx->keys.resumption_master_secret))
         {
             tls_scratch_free(transcript_hash_full, TLS_HASH_MAX_DIGEST_LEN);
-            ERROR_CODE(0x9c);
+            ERROR_CODE(LWIP_E022D, 0x9c);
             return false;
         }
         tls_scratch_free(transcript_hash_full, TLS_HASH_MAX_DIGEST_LEN);
@@ -6184,18 +6184,18 @@ bool tls_send_empty_certificate(
 
     if (!ctx || !out || !written)
     {
-        ERROR_CODE(0x9d);
+        ERROR_CODE(LWIP_E022E, 0x9d);
         return false;
     }
     if (!ctx->client_certificate_requested ||
         ctx->state != TLS_STATE_SERVER_FINISHED_RECEIVED)
     {
-        ERROR_CODE(0x9e);
+        ERROR_CODE(LWIP_E022F, 0x9e);
         return false;
     }
     if (out_len < sizeof(empty_certificate))
     {
-        ERROR_CODE(0x9f);
+        ERROR_CODE(LWIP_E0230, 0x9f);
         return false;
     }
 
@@ -6244,7 +6244,7 @@ static bool tls_recv_finished(
 {
     if (!ctx || !data || data_len < 4)
     {
-        ERROR_CODE(0xa0);
+        ERROR_CODE(LWIP_E0231, 0xa0);
         return false;
     }
     uint8_t hash_alg = tls_cipher_suite_hash(ctx->cipher_suite);
@@ -6252,7 +6252,7 @@ static bool tls_recv_finished(
     if ((hash_alg != TLS_HASH_SHA256 && hash_alg != TLS_HASH_SHA384) ||
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN))
     {
-        ERROR_CODE(0xa0);
+        ERROR_CODE(LWIP_E0232, 0xa0);
         return false;
     }
     if (is_client)
@@ -6262,7 +6262,7 @@ static bool tls_recv_finished(
         if (ctx->state != required_state)
         {
             ctx->state = TLS_STATE_ERROR;
-            ERROR();
+            ERROR(LWIP_E0233);
             return false;
         }
     }
@@ -6278,7 +6278,7 @@ static bool tls_recv_finished(
     } *sec = (void *)mem_buffer_custom_malloc(sizeof(*sec));
     if (!sec)
     {
-        ERROR_CODE(0xa0);
+        ERROR_CODE(LWIP_E0234, 0xa0);
         return false;
     }
     const uint8_t *traffic_secret;
@@ -6292,7 +6292,7 @@ static bool tls_recv_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xa1);
+        ERROR_CODE(LWIP_E0235, 0xa1);
         return false;
     }
 
@@ -6317,7 +6317,7 @@ static bool tls_recv_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xa2);
+        ERROR_CODE(LWIP_E0236, 0xa2);
         return false;
     }
 
@@ -6331,7 +6331,7 @@ static bool tls_recv_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xb8);
+        ERROR_CODE(LWIP_E0237, 0xb8);
         return false;
     }
 
@@ -6340,7 +6340,7 @@ static bool tls_recv_finished(
     {
         tls_secure_memzero(sec, sizeof(*sec));
         mem_buffer_custom_free(sec);
-        ERROR_CODE(0xa3);
+        ERROR_CODE(LWIP_E0238, 0xa3);
         return false;
     }
     tls_hmac_update(&sec->hmac_ctx, sec->transcript_hash, hlen);
@@ -6358,7 +6358,7 @@ static bool tls_recv_finished(
 
     if (diff != 0)
     {
-        ERROR();
+        ERROR(LWIP_E0239);
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_DECRYPT_ERROR);
         return false;
     }
@@ -6511,7 +6511,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
         (ctx->state != TLS_STATE_INIT && ctx->state != TLS_STATE_HRR_RECEIVED) ||
         !ctx->transcript_hash || ctx->ecdhe_job != 0)
     {
-        ERROR_CODE(0xc0);
+        ERROR_CODE(LWIP_E023A, 0xc0);
         return false;
     }
     retry = ctx->state == TLS_STATE_HRR_RECEIVED;
@@ -6915,7 +6915,7 @@ bool tls_server_recv_client_hello(struct tls_handshake_context *ctx,
 
 fail:
     tls_scratch_free(t, sizeof(*t));
-    ERROR_CODE(alert);
+    ERROR_CODE(LWIP_E023B, alert);
     tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
     ctx->state = TLS_STATE_ERROR;
     return false;
@@ -6965,7 +6965,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
 {
     if (!ctx || !out || !written)
     {
-        ERROR_CODE(0xc1);
+        ERROR_CODE(LWIP_E023C, 0xc1);
         return false;
     }
     if (ctx->client_flight_step == TLS_CLIENT_FLIGHT_DONE)
@@ -6976,7 +6976,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
     if (!ctx->transcript_hash || !ctx->client_certificate_requested ||
         ctx->state != TLS_STATE_SERVER_FINISHED_RECEIVED)
     {
-        ERROR_CODE(0xc1);
+        ERROR_CODE(LWIP_E023D, 0xc1);
         return false;
     }
 
@@ -7004,13 +7004,13 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         {
             if (!ctx->client_chain[ci])
             {
-                ERROR_CODE(0xc9);
+                ERROR_CODE(LWIP_E023E, 0xc9);
                 return false;
             }
             size_t der_len = ctx->client_chain[ci]->der_len;
             if (der_len > 0xfffffau || list_len > 0xffffffu - der_len - 5u)
             {
-                ERROR_CODE(0xca);
+                ERROR_CODE(LWIP_E023F, 0xca);
                 return false;
             }
             list_len += 3u + der_len + 2u;
@@ -7019,7 +7019,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         size_t cert_msg = 4u + cert_body;
         if (cert_body > 0xffffffu || out_len < cert_msg)
         {
-            ERROR_CODE(0xcb);
+            ERROR_CODE(LWIP_E0240, 0xcb);
             return false;
         }
 
@@ -7056,7 +7056,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
             (ctx->hash_len != TLS_SHA256_DIGEST_LEN &&
              ctx->hash_len != TLS_SHA384_DIGEST_LEN))
         {
-            ERROR_CODE(0xcc);
+            ERROR_CODE(LWIP_E0241, 0xcc);
             return false;
         }
         /* The transcript hash slot is the suite hash length (32 or 48); the
@@ -7071,7 +7071,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         } *sv = tls_scratch_alloc(sizeof(*sv));
         if (!sv)
         {
-            ERROR_CODE(0xcc);
+            ERROR_CODE(LWIP_E0242, 0xcc);
             return false;
         }
         memset(sv->sign_content, 0x20, 64);
@@ -7089,7 +7089,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(sv->raw_sig))
         {
             tls_scratch_free(sv, sizeof(*sv));
-            ERROR_CODE(0xcc);
+            ERROR_CODE(LWIP_E0243, 0xcc);
             return false;
         }
         size_t der_sig_len = der_encode_ecdsa_sig(sv->der_sig, sv->raw_sig);
@@ -7099,7 +7099,7 @@ bool tls_send_client_certificate(struct tls_handshake_context *ctx,
         if (out_len < cv_msg)
         {
             tls_scratch_free(sv, sizeof(*sv));
-            ERROR_CODE(0xcd);
+            ERROR_CODE(LWIP_E0244, 0xcd);
             return false;
         }
         out[0] = TLS_HANDSHAKE_CERTIFICATE_VERIFY;
@@ -7129,7 +7129,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
 {
     if (!ctx || !out || !written)
     {
-        ERROR_CODE(0xc1);
+        ERROR_CODE(LWIP_E0245, 0xc1);
         return false;
     }
     /* Already complete: report "no more messages" rather than an error, even
@@ -7141,7 +7141,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
     }
     if (!ctx->transcript_hash || ctx->state != TLS_STATE_HANDSHAKE_KEYS_DERIVED)
     {
-        ERROR_CODE(0xc1);
+        ERROR_CODE(LWIP_E0246, 0xc1);
         return false;
     }
 
@@ -7162,7 +7162,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         size_t ee_len = 4u + 2u + ext_len;
         if (out_cap < ee_len)
         {
-            ERROR_CODE(0xc2);
+            ERROR_CODE(LWIP_E0247, 0xc2);
             return false;
         }
         out[0] = TLS_HANDSHAKE_ENCRYPTED_EXTENSIONS;
@@ -7200,7 +7200,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         {
             if (!ctx->server_chain[ci])
             {
-                ERROR_CODE(0xc3);
+                ERROR_CODE(LWIP_E0248, 0xc3);
                 return false;
             }
             size_t der_len = ctx->server_chain[ci]->der_len;
@@ -7208,7 +7208,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
             {
                 /* certificate_list is a 24-bit length; refuse rather than
                  * silently truncate the field. */
-                ERROR_CODE(0xc4);
+                ERROR_CODE(LWIP_E0249, 0xc4);
                 return false;
             }
             list_len += 3u + der_len + 2u;
@@ -7218,7 +7218,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         size_t cert_msg  = 4u + cert_body;
         if (cert_body > 0xffffffu || out_cap < cert_msg)
         {
-            ERROR_CODE(0xc5);
+            ERROR_CODE(LWIP_E024A, 0xc5);
             return false;
         }
 
@@ -7256,7 +7256,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
             (ctx->hash_len != TLS_SHA256_DIGEST_LEN &&
              ctx->hash_len != TLS_SHA384_DIGEST_LEN))
         {
-            ERROR_CODE(0xc6);
+            ERROR_CODE(LWIP_E024B, 0xc6);
             return false;
         }
         struct {
@@ -7268,7 +7268,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         } *sv = tls_scratch_alloc(sizeof(*sv));
         if (!sv)
         {
-            ERROR_CODE(0xc6);
+            ERROR_CODE(LWIP_E024C, 0xc6);
             return false;
         }
         memset(sv->sign_content, 0x20, 64);
@@ -7287,7 +7287,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         if (sign_rc != TLS_KEY_OP_OK || raw_sig_len != sizeof(sv->raw_sig))
         {
             tls_scratch_free(sv, sizeof(*sv));
-            ERROR_CODE(0xc6);
+            ERROR_CODE(LWIP_E024D, 0xc6);
             return false;
         }
 
@@ -7298,7 +7298,7 @@ bool tls_server_send_flight(struct tls_handshake_context *ctx,
         if (out_cap < cv_msg)
         {
             tls_scratch_free(sv, sizeof(*sv));
-            ERROR_CODE(0xc8);
+            ERROR_CODE(LWIP_E024E, 0xc8);
             return false;
         }
         out[0] = TLS_HANDSHAKE_CERTIFICATE_VERIFY;
@@ -7339,7 +7339,7 @@ bool tls_server_recv_finished(struct tls_handshake_context *ctx,
 {
     if (!ctx || ctx->state != TLS_STATE_SERVER_FINISHED_RECEIVED)
     {
-        ERROR_CODE(0xc3);
+        ERROR_CODE(LWIP_E024F, 0xc3);
         return false;
     }
     if (!tls_recv_finished(ctx, false, msg, len))
@@ -7420,7 +7420,7 @@ static bool tls_recv_new_session_ticket(
 
     if (!ctx || !data || data_len < 4)
     {
-        ERROR_CODE(0xa4);
+        ERROR_CODE(LWIP_E0250, 0xa4);
         return false;
     }
     if (ctx->state != TLS_STATE_HANDSHAKE_COMPLETE)
@@ -7434,14 +7434,14 @@ static bool tls_recv_new_session_ticket(
                                                &msg_len);
     if (offset == 0)
     {
-        ERROR_CODE(0xa5);
+        ERROR_CODE(LWIP_E0251, 0xa5);
         return false;
     }
     msg_end = offset + msg_len;
 
     if (offset + 8 > msg_end)
     {
-        ERROR_CODE(0xa6);
+        ERROR_CODE(LWIP_E0252, 0xa6);
         return false;
     }
     ticket_lifetime = ((uint32_t)data[offset] << 24) |
@@ -7464,13 +7464,13 @@ static bool tls_recv_new_session_ticket(
 
     if (offset + 1 > msg_end)
     {
-        ERROR_CODE(0xa7);
+        ERROR_CODE(LWIP_E0253, 0xa7);
         return false;
     }
     nonce_len = data[offset++];
     if (offset + nonce_len > msg_end)
     {
-        ERROR_CODE(0xa8);
+        ERROR_CODE(LWIP_E0254, 0xa8);
         return false;
     }
     nonce = data + offset;
@@ -7478,14 +7478,14 @@ static bool tls_recv_new_session_ticket(
 
     if (offset + 2 > msg_end)
     {
-        ERROR_CODE(0xa9);
+        ERROR_CODE(LWIP_E0255, 0xa9);
         return false;
     }
     ticket_len = ((uint16_t)data[offset] << 8) | (uint16_t)data[offset + 1];
     offset += 2;
     if (offset + ticket_len > msg_end)
     {
-        ERROR_CODE(0xaa);
+        ERROR_CODE(LWIP_E0256, 0xaa);
         return false;
     }
     ticket = data + offset;
@@ -7493,14 +7493,14 @@ static bool tls_recv_new_session_ticket(
 
     if (offset + 2 > msg_end)
     {
-        ERROR_CODE(0xab);
+        ERROR_CODE(LWIP_E0257, 0xab);
         return false;
     }
     ext_len = ((uint16_t)data[offset] << 8) | (uint16_t)data[offset + 1];
     offset += 2;
     if (offset + ext_len != msg_end)
     {
-        ERROR_CODE(0xac);
+        ERROR_CODE(LWIP_E0258, 0xac);
         return false;
     }
 
@@ -7569,7 +7569,7 @@ static bool tls_recv_key_update(
 
     if (!ctx || !data || data_len < 5)
     {
-        ERROR_CODE(0xad);
+        ERROR_CODE(LWIP_E0259, 0xad);
         return false;
     }
     if (ctx->state != TLS_STATE_HANDSHAKE_COMPLETE)
@@ -7583,7 +7583,7 @@ static bool tls_recv_key_update(
                                                &msg_len);
     if (offset == 0 || msg_len != 1)
     {
-        ERROR_CODE(0xae);
+        ERROR_CODE(LWIP_E025A, 0xae);
         return false;
     }
 
@@ -7591,7 +7591,7 @@ static bool tls_recv_key_update(
     if (request_update != 0 && request_update != 1)
     {
         tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, TLS_ALERT_ILLEGAL_PARAMETER);
-        ERROR_CODE(0xaf);
+        ERROR_CODE(LWIP_E025B, 0xaf);
         return false;
     }
 
@@ -7607,13 +7607,13 @@ static bool tls_recv_key_update(
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN) ||
         (klen != 16 && klen != 32))
     {
-        ERROR_CODE(0xbc);
+        ERROR_CODE(LWIP_E025C, 0xbc);
         return false;
     }
     k = tls_scratch_alloc(sizeof(*k));
     if (!k)
     {
-        ERROR_CODE(0xb0);
+        ERROR_CODE(LWIP_E025D, 0xb0);
         return false;
     }
     if (!tls_hkdf_expand_label(hash_alg,
@@ -7622,7 +7622,7 @@ static bool tls_recv_key_update(
                                k->next_secret, hlen))
     {
         tls_scratch_free(k, sizeof(*k));
-        ERROR_CODE(0xb0);
+        ERROR_CODE(LWIP_E025E, 0xb0);
         return false;
     }
     if (!tls_hkdf_expand_label(hash_alg,
@@ -7631,7 +7631,7 @@ static bool tls_recv_key_update(
                                k->next_key, klen))
     {
         tls_scratch_free(k, sizeof(*k));
-        ERROR_CODE(0xb1);
+        ERROR_CODE(LWIP_E025F, 0xb1);
         return false;
     }
     if (!tls_hkdf_expand_label(hash_alg,
@@ -7640,7 +7640,7 @@ static bool tls_recv_key_update(
                                k->next_iv, 12))
     {
         tls_scratch_free(k, sizeof(*k));
-        ERROR_CODE(0xb2);
+        ERROR_CODE(LWIP_E0260, 0xb2);
         return false;
     }
     memcpy(ctx->keys.server_application_traffic_secret, k->next_secret, hlen);
@@ -7653,7 +7653,7 @@ static bool tls_recv_key_update(
 
     if (request_update == 1 && !tls_send_key_update_record(ctx))
     {
-        ERROR_CODE(0xb3);
+        ERROR_CODE(LWIP_E0261, 0xb3);
         return false;
     }
 
@@ -7705,7 +7705,7 @@ static bool tls_ratchet_client_application_keys(struct tls_handshake_context *ct
         (hlen != TLS_SHA256_DIGEST_LEN && hlen != TLS_SHA384_DIGEST_LEN) ||
         (klen != 16 && klen != 32))
     {
-        ERROR_CODE(0xbd);
+        ERROR_CODE(LWIP_E0262, 0xbd);
         return false;
     }
     k = tls_scratch_alloc(sizeof(*k));
@@ -7817,7 +7817,7 @@ static bool tls_send_alert(
 {
     if (!ctx)
     {
-        ERROR_CODE(0xb3);
+        ERROR_CODE(LWIP_E0263, 0xb3);
         return false;
     }
 
@@ -7917,8 +7917,8 @@ static bool tls_send_alert(
     if (level == TLS_ALERT_LEVEL_FATAL)
     {
         ctx->state = TLS_STATE_ERROR;
-        ERROR_CODE(description);
-        ERROR_INFO(tls_alert_name(description));
+        ERROR_CODE(LWIP_E0264, description);
+        ERROR_INFO(LWIP_E0265, tls_alert_name(description));
     }
 
     return ok;
@@ -7931,7 +7931,7 @@ bool tls_send_close_notify(struct tls_handshake_context *ctx)
 {
     if (!ctx)
     {
-        ERROR_CODE(0xb4);
+        ERROR_CODE(LWIP_E0266, 0xb4);
         return false;
     }
     if (ctx->close_notify_sent)
@@ -7979,7 +7979,7 @@ static int tls_settle_ecdhe(struct tls_handshake_context *ctx, uint16_t *job, bo
     }
     if (!ok)
     {
-        ERROR();
+        ERROR(LWIP_E0267);
         tls_secure_memzero(priv, 32);
         tls_secure_memzero(ctx->ecdhe_shared, sizeof(ctx->ecdhe_shared));
         if (secret)
@@ -8028,7 +8028,7 @@ int tls_offload_settle(struct tls_handshake_context *ctx)
         tls_deferred_free(d);
         if (!ok)
         {
-            ERROR();
+            ERROR(LWIP_E0268);
             tls_send_alert(ctx, TLS_ALERT_LEVEL_FATAL, alert);
             ctx->state = TLS_STATE_ERROR;
             return -1;

@@ -61,11 +61,11 @@ bool tls_hkdf_extract(
     size_t hash_len = get_hash_length(hash_algorithm);
 
     if (hash_len == 0 || !prk) {
-        ERROR();
+        ERROR(LWIP_E0270);
         return false;
     }
     if (!salt && salt_len != 0) {
-        ERROR();
+        ERROR(LWIP_E0271);
         return false;
     }
 
@@ -81,7 +81,7 @@ bool tls_hkdf_extract(
         /* ikm_len kept as-is so the caller controls how many zero bytes, but
          * it can never exceed the zero buffer (HashLen at most). */
         if (ikm_len > sizeof(zeros)) {
-            ERROR();
+            ERROR(LWIP_E0272);
             return false;
         }
         ikm = zeros;
@@ -89,13 +89,13 @@ bool tls_hkdf_extract(
 
     ctx = tls_scratch_alloc(sizeof(*ctx));
     if (!ctx) {
-        ERROR();
+        ERROR(LWIP_E0273);
         return false;
     }
 
     /* PRK = HMAC(salt, ikm) */
     if (!tls_hmac_context_init(ctx, hash_algorithm, salt, salt_len)) {
-        ERROR();
+        ERROR(LWIP_E0274);
         tls_scratch_free(ctx, sizeof(*ctx));
         return false;
     }
@@ -143,23 +143,23 @@ bool tls_hkdf_expand(
     size_t offset = 0;
 
     if (hash_len == 0 || !prk || !okm) {
-        ERROR();
+        ERROR(LWIP_E0275);
         return false;
     }
 
     if (prk_len < hash_len) {
-        ERROR();
+        ERROR(LWIP_E0276);
         return false;
     }
 
     if (!info && info_len > 0) {
-        ERROR();
+        ERROR(LWIP_E0277);
         return false;
     }
 
     /* Check okm_len is not too large: max = 255 * HashLen */
     if (okm_len > 255 * hash_len) {
-        ERROR();
+        ERROR(LWIP_E0278);
         return false;
     }
 
@@ -168,7 +168,7 @@ bool tls_hkdf_expand(
 
     t = tls_scratch_alloc(sizeof(*t));
     if (!t) {
-        ERROR();
+        ERROR(LWIP_E0279);
         return false;
     }
 
@@ -178,7 +178,7 @@ bool tls_hkdf_expand(
 
         /* Initialize HMAC with PRK */
         if (!tls_hmac_context_init(&t->ctx, hash_algorithm, prk, prk_len)) {
-            ERROR();
+            ERROR(LWIP_E027A);
             tls_scratch_free(t, sizeof(*t));
             return false;
         }
@@ -249,25 +249,25 @@ bool tls_hkdf_expand_label(
 
     if (!secret || !label || !out ||
         (!context && context_len != 0)) {
-        ERROR();
+        ERROR(LWIP_E027B);
         return false;
     }
 
     /* Check label length: "tls13 " + label must be 7..255 bytes */
     if (full_label_len < 7 || full_label_len > 255) {
-        ERROR_CODE(full_label_len > 0xFFFF ? 0xFFFF : full_label_len);
+        ERROR_CODE(LWIP_E027C, full_label_len > 0xFFFF ? 0xFFFF : full_label_len);
         return false;
     }
 
     /* Check context length: 0..255 bytes */
     if (context_len > 255) {
-        ERROR_CODE(context_len > 0xFFFF ? 0xFFFF : context_len);
+        ERROR_CODE(LWIP_E027D, context_len > 0xFFFF ? 0xFFFF : context_len);
         return false;
     }
 
     needed = 2u + 1u + full_label_len + 1u + context_len;
     if (needed > TLS_HKDF_LABEL_SCRATCH_SIZE) {
-        ERROR_CODE(needed > 0xFFFF ? 0xFFFF : needed);
+        ERROR_CODE(LWIP_E027E, needed > 0xFFFF ? 0xFFFF : needed);
         return false;
     }
 
@@ -332,7 +332,7 @@ bool tls_derive_secret(
     size_t hash_len = get_hash_length(hash_algorithm);
 
     if (hash_len == 0 || transcript_hash_len != hash_len) {
-        ERROR();
+        ERROR(LWIP_E027F);
         return false;
     }
 

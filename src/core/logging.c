@@ -164,7 +164,8 @@ size_t lwip_traceback_copy(struct lwip_traceback_entry *dst, size_t cap)
     return n;
 }
 
-void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra)
+void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t extra,
+                          uint16_t eid)
 {
     if (kind == LWIP_EV_DEBUG)
     {
@@ -189,6 +190,7 @@ void lwip_event_emit_code(uint8_t module, uint8_t kind, uint32_t loc, uint16_t e
     struct lwip_event ev = {0};
     ev.module = module;
     ev.kind = kind;
+    ev.eid = eid;
     ev.data.code.loc = loc;
     ev.data.code.extra = extra;
     g_event_fn(&ev);
@@ -225,7 +227,7 @@ void lwip_event_emit_info(uint8_t module, const char *msg)
     g_event_fn(&ev);
 }
 
-void lwip_event_emit_error_info(uint8_t module, const char *msg)
+void lwip_event_emit_error_info(uint8_t module, const char *msg, uint16_t eid)
 {
     if (!g_event_fn || !kind_admitted(LWIP_EV_ERROR_MSG))
     {
@@ -234,6 +236,7 @@ void lwip_event_emit_error_info(uint8_t module, const char *msg)
     struct lwip_event ev;
     ev.module = module;
     ev.kind = LWIP_EV_ERROR_MSG;
+    ev.eid = eid;
     ev.data.msg = msg;
     g_event_fn(&ev);
 }
@@ -302,7 +305,7 @@ void lwip_log_event_at(uint16_t module, uint16_t module_state, uint16_t line)
 {
     (void)module_state;
     lwip_event_emit_code((uint8_t)module, LWIP_EV_ERROR,
-                         LWIP_EVENT_CODE(LWIP_FILE_NONE, line), 0);
+                         LWIP_EVENT_CODE(LWIP_FILE_NONE, line), 0, LWIP_E0000);
 }
 
 void lwip_log_fatal_at(uint16_t module, uint16_t module_state, uint16_t line)

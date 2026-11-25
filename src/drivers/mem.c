@@ -701,7 +701,7 @@ bool mem_init_dynamic(size_t max_heap,
 {
     if (!malloc_fn || !free_fn)
     {
-        ERROR();
+        ERROR(LWIP_E00E3);
         return false;
     }
 
@@ -729,14 +729,14 @@ bool mem_init_static(void *buffer, size_t buffer_size)
 {
     if (!buffer || buffer_size < (sizeof(struct mem_static_block) + MEM_STATIC_ALIGN))
     {
-        ERROR();
+        ERROR(LWIP_E00E4);
         return false;
     }
 
     mem_static_init(buffer, buffer_size);
     if (!g_mem_static.ready)
     {
-        ERROR();
+        ERROR(LWIP_E00E5);
         return false;
     }
 
@@ -860,12 +860,12 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
 {
     if (!g_mem_cfg_ready)
     {
-        ERROR();
+        ERROR(LWIP_E00E6);
         return NULL;
     }
     if ((initial_size == 0 && type != MEM_BUFFER_FILE) || !g_mem_cfg.malloc_fn || !g_mem_cfg.free_fn)
     {
-        ERROR();
+        ERROR(LWIP_E00E7);
         return NULL;
     }
 
@@ -885,7 +885,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
     {
         if (!mem_buffer_charge(sizeof(struct mem_buffer) + initial_size))
         {
-            ERROR_CODE(initial_size > 0xFFFF ? 0xFFFF : initial_size);
+            ERROR_CODE(LWIP_E00E8, initial_size > 0xFFFF ? 0xFFFF : initial_size);
             return NULL;
         }
     }
@@ -893,7 +893,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
     struct mem_buffer *rb = (struct mem_buffer *)g_mem_cfg.malloc_fn(sizeof(struct mem_buffer));
     if (!rb)
     {
-        ERROR_CODE(sizeof(struct mem_buffer) > 0xFFFF ? 0xFFFF : sizeof(struct mem_buffer));
+        ERROR_CODE(LWIP_E00E9, sizeof(struct mem_buffer) > 0xFFFF ? 0xFFFF : sizeof(struct mem_buffer));
         if (!skip_heap_accounting)
         {
             mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
@@ -907,7 +907,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         rb->buf = (uint8_t *)g_mem_cfg.malloc_fn(initial_size);
         if (!rb->buf)
         {
-            ERROR_CODE(initial_size > 0xFFFF ? 0xFFFF : initial_size);
+            ERROR_CODE(LWIP_E00EA, initial_size > 0xFFFF ? 0xFFFF : initial_size);
             g_mem_cfg.free_fn(rb);
             if (!skip_heap_accounting)
             {
@@ -953,7 +953,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         rb->u.file.slots = (struct mem_file_slot *)g_mem_cfg.malloc_fn(sizeof(struct mem_file_slot) * MEM_FILE_MAX_SLOTS);
         if (!rb->u.file.slots)
         {
-            ERROR();
+            ERROR(LWIP_E00EB);
             g_mem_cfg.free_fn(rb);
             if (rb->buf)
             {
@@ -977,7 +977,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         }
         if (rb->current_size < block_size)
         {
-            ERROR_CODE(block_size > 0xFFFF ? 0xFFFF : block_size);
+            ERROR_CODE(LWIP_E00EC, block_size > 0xFFFF ? 0xFFFF : block_size);
             g_mem_cfg.free_fn(rb->buf);
             g_mem_cfg.free_fn(rb);
             if (!skip_heap_accounting)
@@ -994,7 +994,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         {
             if (!mem_buffer_charge(rb->u.pool.pool_bitmap_bytes))
             {
-                ERROR_CODE(rb->u.pool.pool_bitmap_bytes);
+                ERROR_CODE(LWIP_E00ED, rb->u.pool.pool_bitmap_bytes);
                 g_mem_cfg.free_fn(rb->buf);
                 g_mem_cfg.free_fn(rb);
                 mem_buffer_release(sizeof(struct mem_buffer) + initial_size);
@@ -1004,7 +1004,7 @@ struct mem_buffer *mem_buffer_create(enum mem_buffer_type type,
         rb->u.pool.pool_bitmap = (uint8_t *)g_mem_cfg.malloc_fn(rb->u.pool.pool_bitmap_bytes);
         if (!rb->u.pool.pool_bitmap)
         {
-            ERROR_CODE(rb->u.pool.pool_bitmap_bytes);
+            ERROR_CODE(LWIP_E00EE, rb->u.pool.pool_bitmap_bytes);
             if (!skip_heap_accounting)
             {
                 mem_buffer_release(rb->u.pool.pool_bitmap_bytes);
@@ -1221,7 +1221,7 @@ static void mem_buffer_notify_pressure(struct mem_buffer *rb, size_t requested, 
     /* Only notify on level changes */
     if (level != old_level && level == MEM_PRESSURE_CRITICAL)
     {
-        ERROR_CODE(requested > 0xFFFF ? 0xFFFF : requested);
+        ERROR_CODE(LWIP_E00EF, requested > 0xFFFF ? 0xFFFF : requested);
     }
     if (level != old_level && rb->pressure_cb)
     {
@@ -1695,20 +1695,20 @@ void mem_buffer_free(struct mem_buffer *rb, void *ptr)
     uint8_t *base = (uint8_t *)ptr - MEM_POOL_HEADER_SIZE;
     if (base < rb->buf || base >= (rb->buf + rb->current_size))
     {
-        ERROR();
+        ERROR(LWIP_E00F0);
         return;
     }
     size_t offset = (size_t)(base - rb->buf);
     if ((offset % rb->u.pool.pool_block_size) != 0)
     {
-        ERROR();
+        ERROR(LWIP_E00F1);
         return;
     }
     size_t start = offset / rb->u.pool.pool_block_size;
     uint16_t blocks = *(uint16_t *)base;
     if (blocks == 0 || start + blocks > rb->u.pool.pool_block_count)
     {
-        ERROR_CODE(blocks);
+        ERROR_CODE(LWIP_E00F2, blocks);
         return;
     }
 
@@ -2099,13 +2099,13 @@ static void *mem_direct_alloc(size_t size, uint16_t flags)
     {
         if (!mem_user_charge(raw_size))
         {
-            ERROR_CODE(raw_size > 0xFFFF ? 0xFFFF : raw_size);
+            ERROR_CODE(LWIP_E00F3, raw_size > 0xFFFF ? 0xFFFF : raw_size);
             return NULL;
         }
     }
     else if (!mem_buffer_charge(raw_size))
     {
-        ERROR_CODE(raw_size > 0xFFFF ? 0xFFFF : raw_size);
+        ERROR_CODE(LWIP_E00F4, raw_size > 0xFFFF ? 0xFFFF : raw_size);
         return NULL;
     }
 
@@ -2113,7 +2113,7 @@ static void *mem_direct_alloc(size_t size, uint16_t flags)
         (struct mem_direct_header *)g_mem_cfg.malloc_fn(raw_size);
     if (!hdr)
     {
-        ERROR_CODE(raw_size > 0xFFFF ? 0xFFFF : raw_size);
+        ERROR_CODE(LWIP_E00F5, raw_size > 0xFFFF ? 0xFFFF : raw_size);
         if (user)
         {
             mem_user_release(raw_size);
@@ -2139,7 +2139,7 @@ static struct mem_direct_header *mem_direct_header_from_ptr(void *ptr)
     struct mem_direct_header *hdr = ((struct mem_direct_header *)ptr) - 1;
     if (hdr->magic != MEM_DIRECT_MAGIC)
     {
-        ERROR();
+        ERROR(LWIP_E00F6);
         return NULL;
     }
     return hdr;

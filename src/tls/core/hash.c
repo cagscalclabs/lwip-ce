@@ -58,7 +58,7 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
 {
     if (ctx == NULL)
     {
-        ERROR();
+        ERROR(LWIP_E0269);
         return false;
     }
     tls_hash_clear(ctx);
@@ -92,7 +92,7 @@ bool tls_hash_context_init(struct tls_hash_context *ctx, uint8_t algorithm)
         ctx->digest = tls_sha256hw_digest;
         break;      */
     default:
-        ERROR_CODE(algorithm);
+        ERROR_CODE(LWIP_E026A, algorithm);
         return false;
     }
     if (!ctx->init(&ctx->_private))
@@ -113,7 +113,7 @@ void tls_hash_update(struct tls_hash_context *ctx, const uint8_t *data, size_t l
     if (ctx == NULL || ctx->update == NULL ||
         (data == NULL && len != 0))
     {
-        ERROR();
+        ERROR(LWIP_E026B);
         return;
     }
     tls_crypto_guard_enable();
@@ -125,7 +125,7 @@ void tls_hash_digest(struct tls_hash_context *ctx, uint8_t *digest)
 {
     if (ctx == NULL || ctx->digest == NULL || digest == NULL)
     {
-        ERROR();
+        ERROR(LWIP_E026C);
         return;
     }
     tls_crypto_guard_enable();
@@ -144,7 +144,7 @@ struct tls_hash_context *tls_hash_context_alloc(uint8_t algorithm)
     struct tls_hash_context *ctx = tls_scratch_alloc(sizeof(*ctx));
     if (!ctx)
     {
-        ERROR();
+        ERROR(LWIP_E026D);
         return NULL;
     }
     if (!tls_hash_context_init(ctx, algorithm))
@@ -170,13 +170,13 @@ bool tls_mgf1(const uint8_t *data, size_t datalen, uint8_t *outbuf, size_t outle
     } *t;
     if (outbuf == NULL || (data == NULL && datalen != 0))
     {
-        ERROR();
+        ERROR(LWIP_E026E);
         return false;
     }
     t = tls_scratch_alloc(sizeof(*t));
     if (!t)
     {
-        ERROR();
+        ERROR(LWIP_E026F);
         return false;
     }
     if (!tls_hash_context_init(&t->hash_data, hash_alg))

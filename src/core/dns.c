@@ -590,7 +590,7 @@ dns_local_addhost(const char *hostname, const ip_addr_t *addr)
   LWIP_ASSERT("namelen <= DNS_LOCAL_HOSTLIST_MAX_NAMELEN", namelen <= DNS_LOCAL_HOSTLIST_MAX_NAMELEN);
   entry = (struct local_hostlist_entry *)memp_malloc(MEMP_LOCALHOSTLIST);
   if (entry == NULL) {
-    LWIP_TRACE_RETURN(ERR_MEM);
+    LWIP_TRACE_RETURN(LWIP_E0085, ERR_MEM);
   }
   entry_name = (char *)entry + sizeof(struct local_hostlist_entry);
   MEMCPY(entry_name, hostname, namelen);
@@ -876,14 +876,14 @@ dns_send(u8_t idx)
     /* free pbuf */
     pbuf_free(p);
   } else {
-    WARN();
+    WARN(LWIP_E0086);
     err = ERR_MEM;
   }
 
-  LWIP_TRACE_RETURN(err);
+  LWIP_TRACE_RETURN(LWIP_E0087, err);
 overflow_return:
   pbuf_free(p);
-  LWIP_TRACE_RETURN(ERR_VAL);
+  LWIP_TRACE_RETURN(LWIP_E0088, ERR_VAL);
 }
 
 #if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
@@ -1465,7 +1465,7 @@ dns_enqueue(const char *name, size_t hostnamelen, dns_found_callback found,
     if ((lseqi >= DNS_TABLE_SIZE) || (dns_table[lseqi].state != DNS_STATE_DONE)) {
       /* no entry can be used now, table is full */
       LWIP_DEBUGF(DNS_DEBUG, ("dns_enqueue: \"%s\": DNS entries table is full\n", name));
-      LWIP_TRACE_RETURN(ERR_MEM);
+      LWIP_TRACE_RETURN(LWIP_E0089, ERR_MEM);
     } else {
       /* use the oldest completed one */
       i = lseqi;
@@ -1485,7 +1485,7 @@ dns_enqueue(const char *name, size_t hostnamelen, dns_found_callback found,
   if (req == NULL) {
     /* no request entry can be used now, table is full */
     LWIP_DEBUGF(DNS_DEBUG, ("dns_enqueue: \"%s\": DNS request entries table is full\n", name));
-    LWIP_TRACE_RETURN(ERR_MEM);
+    LWIP_TRACE_RETURN(LWIP_E008A, ERR_MEM);
   }
   req->dns_table_idx = i;
 #else
@@ -1513,7 +1513,7 @@ dns_enqueue(const char *name, size_t hostnamelen, dns_found_callback found,
     LWIP_DEBUGF(DNS_DEBUG, ("dns_enqueue: \"%s\": failed to allocate a pcb\n", name));
     entry->state = DNS_STATE_UNUSED;
     req->found = NULL;
-    LWIP_TRACE_RETURN(ERR_MEM);
+    LWIP_TRACE_RETURN(LWIP_E008B, ERR_MEM);
   }
   LWIP_DEBUGF(DNS_DEBUG, ("dns_enqueue: \"%s\": use DNS pcb %"U16_F"\n", name, (u16_t)(entry->pcb_idx)));
 #endif
@@ -1651,7 +1651,7 @@ dns_gethostbyname_addrtype(const char *hostname, ip_addr_t *addr, dns_found_call
   {
     /* prevent calling found callback if no server is set, return error instead */
     if (ip_addr_isany_val(dns_servers[0])) {
-      LWIP_TRACE_RETURN(ERR_VAL);
+      LWIP_TRACE_RETURN(LWIP_E008C, ERR_VAL);
     }
   }
 

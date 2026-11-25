@@ -318,7 +318,7 @@ bool lwip_stack_init(void)
         lwip_log_file_start(g_lwip_cfg.log_archive_slots);
 
     if (g_lwip_cfg.tls_enabled && !tls_init())
-        WARN();
+        WARN(LWIP_E010A);
 
 #if LWIP_NETIF_EXT_STATUS_CALLBACK
     netif_add_ext_callback(&g_socket_netif_callback, socket_netif_changed);
@@ -911,7 +911,7 @@ static lwip_error_t lwip_socket_rx_ring_create(struct lwip_socket *conn)
                                       BUFFER_SOCKET_RING);
     if (!conn->rx_ring)
     {
-        ERROR_CODE(init > 0xFFFF ? 0xFFFF : init);
+        ERROR_CODE(LWIP_E010B, init > 0xFFFF ? 0xFFFF : init);
         conn->last_error = LWIP_ERR_MEM;
         return LWIP_ERR_MEM;
     }
@@ -974,7 +974,7 @@ static bool lwip_socket_take_stream(struct lwip_socket *conn, struct pbuf *p)
 {
     if (lwip_socket_rx_ring_create(conn) != LWIP_OK)
     {
-        ERROR();
+        ERROR(LWIP_E010C);
         return false;
     }
     if (conn->rx_pending)
@@ -997,7 +997,7 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
     }
     if (lwip_socket_rx_ring_create(conn) != LWIP_OK)
     {
-        ERROR();
+        ERROR(LWIP_E010D);
         return false;
     }
     bool framed = conn->protocol == LWIP_SOCKET_UDP;
@@ -1024,7 +1024,7 @@ static bool lwip_socket_buffer_pbuf(struct lwip_socket *conn, struct pbuf *p)
                              (const uint8_t *)q->payload,
                              q->len))
         {
-            ERROR_CODE(q->len);
+            ERROR_CODE(LWIP_E010E, q->len);
             conn->last_error = LWIP_ERR_MEM;
             return false;
         }
@@ -1420,7 +1420,7 @@ static void lwip_socket_fail(struct lwip_socket *conn, lwip_error_t err)
 {
     if (!conn)
         return;
-    ERROR_CODE(err);
+    ERROR_CODE(LWIP_E010F, err);
     lwip_socket_set_pending_host(conn, NULL);
     conn->connect_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
@@ -2104,7 +2104,7 @@ static void conn_connect_fail_timeout(struct lwip_socket *conn)
     }
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_CONNECT;
-    ERROR_CODE(LWIP_ERR_CONNECT);
+    ERROR_CODE(LWIP_E0110, LWIP_ERR_CONNECT);
     conn_error_enqueue(conn, conn_transport_component(conn),
                        LWIP_SOCKET_ERR_OP_CONNECT, (int)ERR_TIMEOUT,
                        LWIP_ERR_CONNECT);
@@ -2258,7 +2258,7 @@ static void conn_altcp_err_cb(void *arg, err_t err)
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
     }
-    ERROR_CODE(c->last_error);
+    ERROR_CODE(LWIP_E0111, c->last_error);
     c->pcb.altcp = NULL; /* lower layer freed the pcb */
     if (g_lwip_stopping)
         return;
@@ -2286,7 +2286,7 @@ static err_t conn_altcp_connected_cb(void *arg, struct altcp_pcb *pcb, err_t err
     {
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
-        ERROR_CODE(c->last_error);
+        ERROR_CODE(LWIP_E0112, c->last_error);
         conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_ALTCP,
                            LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                            c->last_error);
@@ -2434,7 +2434,7 @@ static void conn_tcp_err_cb(void *arg, err_t err)
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
     }
-    ERROR_CODE(c->last_error);
+    ERROR_CODE(LWIP_E0113, c->last_error);
     c->pcb.tcp = NULL;
     if (g_lwip_stopping)
         return;
@@ -2458,7 +2458,7 @@ static err_t conn_tcp_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err)
     {
         c->status = LWIP_STATUS_ERROR;
         c->last_error = lwip_err_translate(err);
-        ERROR_CODE(c->last_error);
+        ERROR_CODE(LWIP_E0114, c->last_error);
         conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_TCP,
                            LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                            c->last_error);
@@ -2586,7 +2586,7 @@ struct lwip_socket *lwip_socket_create_ex(lwip_socket_type_t protocol,
 
     if (lwip_socket_rx_ring_create(conn) != LWIP_OK)
     {
-        ERROR();
+        ERROR(LWIP_E0115);
         mem_free(conn);
         return NULL;
     }
@@ -2654,7 +2654,7 @@ struct lwip_socket *lwip_socket_create_ex(lwip_socket_type_t protocol,
     return conn;
 
 fail_mem:
-    ERROR();
+    ERROR(LWIP_E0116);
     lwip_socket_rx_ring_destroy(conn);
     mem_free(conn);
     return NULL;
@@ -2917,7 +2917,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         c->connect_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = LWIP_ERR_DNS;
-        ERROR_CODE(c->last_error);
+        ERROR_CODE(LWIP_E0117, c->last_error);
         conn_error_enqueue(c, LWIP_SOCKET_ERR_COMP_DNS,
                            LWIP_SOCKET_ERR_OP_DNS_LOOKUP, (int)ERR_VAL,
                            LWIP_ERR_DNS);
@@ -2935,7 +2935,7 @@ static void conn_dns_found_cb(const char *name, const ip_addr_t *ipaddr,
         c->connect_deadline = 0;
         c->status = LWIP_STATUS_ERROR;
         c->last_error = mapped;
-        ERROR_CODE(c->last_error);
+        ERROR_CODE(LWIP_E0118, c->last_error);
         conn_error_enqueue(c, conn_transport_component(c),
                            LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                            c->last_error);
@@ -3106,7 +3106,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         {
             conn->status = LWIP_STATUS_ERROR;
             conn->last_error = lwip_err_translate(err);
-            ERROR_CODE(conn->last_error);
+            ERROR_CODE(LWIP_E0119, conn->last_error);
             conn_error_enqueue(conn, conn_transport_component(conn),
                                LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                                conn->last_error);
@@ -3127,7 +3127,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
         {
             conn->status = LWIP_STATUS_ERROR;
             conn->last_error = lwip_err_translate(err);
-            ERROR_CODE(conn->last_error);
+            ERROR_CODE(LWIP_E011A, conn->last_error);
             conn_error_enqueue(conn, conn_transport_component(conn),
                                LWIP_SOCKET_ERR_OP_CONNECT, (int)err,
                                conn->last_error);
@@ -3168,7 +3168,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     conn->connect_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
-    ERROR_CODE(conn->last_error);
+    ERROR_CODE(LWIP_E011B, conn->last_error);
     conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_DNS,
                        LWIP_SOCKET_ERR_OP_DNS_LOOKUP, (int)derr,
                        LWIP_ERR_DNS);
@@ -3178,7 +3178,7 @@ static lwip_error_t lwip_socket_connect_now(struct lwip_socket *conn,
     conn->connect_deadline = 0;
     conn->status = LWIP_STATUS_ERROR;
     conn->last_error = LWIP_ERR_DNS;
-    ERROR_CODE(conn->last_error);
+    ERROR_CODE(LWIP_E011C, conn->last_error);
     conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_DNS,
                        LWIP_SOCKET_ERR_OP_DNS_LOOKUP, (int)ERR_VAL,
                        LWIP_ERR_DNS);
@@ -3243,14 +3243,14 @@ static err_t socket_altcp_accept_cb(void *arg, struct altcp_pcb *newpcb, err_t e
 
     if (err != ERR_OK || !newpcb || !listener)
     {
-        ERROR_CODE(err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
+        ERROR_CODE(LWIP_E011D, err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
         return ERR_VAL;
     }
 
     struct lwip_socket *peer = mem_malloc(sizeof(*peer));
     if (!peer)
     {
-        ERROR_CODE(-ERR_MEM);
+        ERROR_CODE(LWIP_E011E, -ERR_MEM);
         altcp_abort(newpcb);
         return ERR_ABRT;
     }
@@ -3264,7 +3264,7 @@ static err_t socket_altcp_accept_cb(void *arg, struct altcp_pcb *newpcb, err_t e
 
     if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
     {
-        ERROR_CODE(-ERR_MEM);
+        ERROR_CODE(LWIP_E011F, -ERR_MEM);
         mem_free(peer);
         altcp_abort(newpcb);
         return ERR_ABRT;
@@ -3288,14 +3288,14 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 
     if (err != ERR_OK || !newpcb || !listener)
     {
-        ERROR_CODE(err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
+        ERROR_CODE(LWIP_E0120, err != ERR_OK ? (uint16_t)(-err) : (uint16_t)(-ERR_ARG));
         return ERR_VAL;
     }
 
     struct lwip_socket *peer = mem_malloc(sizeof(*peer));
     if (!peer)
     {
-        ERROR_CODE(-ERR_MEM);
+        ERROR_CODE(LWIP_E0121, -ERR_MEM);
         tcp_abort(newpcb);
         return ERR_ABRT;
     }
@@ -3309,7 +3309,7 @@ static err_t socket_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 
     if (lwip_socket_rx_ring_create(peer) != LWIP_OK)
     {
-        ERROR_CODE(-ERR_MEM);
+        ERROR_CODE(LWIP_E0122, -ERR_MEM);
         mem_free(peer);
         tcp_abort(newpcb);
         return ERR_ABRT;
@@ -3484,7 +3484,7 @@ lwip_error_t lwip_socket_write(struct lwip_socket *conn,
             {
                 return mapped;
             }
-            ERROR_CODE(-e);
+            ERROR_CODE(LWIP_E0123, -e);
             conn_error_enqueue(conn, LWIP_SOCKET_ERR_COMP_TCP,
                                LWIP_SOCKET_ERR_OP_WRITE, (int)e, mapped);
             return mapped;

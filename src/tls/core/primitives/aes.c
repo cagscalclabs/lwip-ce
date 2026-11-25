@@ -370,7 +370,7 @@ static __attribute__((noinline)) bool aes_init_impl(struct tls_aes_context *ctx,
 {
     if (ctx == NULL)
     {
-        ERROR();
+        ERROR(LWIP_E0289);
         return false;
     }
     /* A failed reinitialization must not leave the previous key schedule, nor
@@ -379,7 +379,7 @@ static __attribute__((noinline)) bool aes_init_impl(struct tls_aes_context *ctx,
 
     if ((key == NULL) || (iv == NULL))
     {
-        ERROR();
+        ERROR(LWIP_E028A);
         return false;
     }
 
@@ -390,7 +390,7 @@ static __attribute__((noinline)) bool aes_init_impl(struct tls_aes_context *ctx,
         /* SP 800-38D 5.2.1.1: a GCM IV is at least 1 bit; an empty one would
          * make J0 depend on the key alone.  Non-GCM modes are limited to one
          * block (CBC/CCM IVs/nonces are always <= 16 bytes). */
-        ERROR();
+        ERROR(LWIP_E028B);
         return false;
     }
     switch (key_len)
@@ -402,7 +402,7 @@ static __attribute__((noinline)) bool aes_init_impl(struct tls_aes_context *ctx,
     case 32:
         break;
     default:
-        ERROR_CODE(key_len);
+        ERROR_CODE(LWIP_E028C, key_len);
         return false;
     }
 
@@ -434,7 +434,7 @@ static __attribute__((noinline)) bool aes_init_impl(struct tls_aes_context *ctx,
         // i don't think anything needs setup here
         break;
     default:
-        ERROR_CODE(mode);
+        ERROR_CODE(LWIP_E028D, mode);
         aes_destroy_ctx_impl(ctx);
         return false;
     }
@@ -1008,7 +1008,7 @@ static __attribute__((noinline)) bool aes_verify_impl(struct tls_aes_context *ct
         : tls_bytes_compare(tag, digest, AES_BLOCK_SIZE);
     if (!tag_ok)
     {
-        ERROR();
+        ERROR(LWIP_E028E);
     }
     else
     {

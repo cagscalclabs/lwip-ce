@@ -28,7 +28,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
        (saltlen==0) ||
        (keylen==0) ||
        (rounds==0) ||
-       (rounds > TLS_PBKDF2_MAX_ROUNDS)) { ERROR(); return false; }
+       (rounds > TLS_PBKDF2_MAX_ROUNDS)) { ERROR(LWIP_E0285); return false; }
        
     struct {
         uint8_t hash_buffer[HASH_BLOCK_OUT_MAX];
@@ -40,7 +40,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     uint32_t ctr = 1;
 
     t = tls_scratch_alloc(sizeof(*t));
-    if (!t) { ERROR(); return false; }
+    if (!t) { ERROR(LWIP_E0286); return false; }
     memset(t, 0, sizeof(*t));
 
     // DK = T(i) for i in 0 => (keylen/HASH), concat; HASH is the selected
@@ -48,7 +48,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     if(!tls_hmac_context_init(&t->initial, algorithm,
                               (const uint8_t *)password, passlen)) {
         tls_scratch_free(t, sizeof(*t));
-        ERROR();
+        ERROR(LWIP_E0287);
         return false;
     }
 
@@ -56,7 +56,7 @@ bool tls_pbkdf2(const char* password, size_t passlen,
     if (hash_len == 0 || hash_len > HASH_BLOCK_OUT_MAX)
     {
         tls_scratch_free(t, sizeof(*t));
-        ERROR();
+        ERROR(LWIP_E0288);
         return false;
     }
 

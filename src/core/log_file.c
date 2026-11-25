@@ -16,12 +16,15 @@
 
 /* Log line format (plain ASCII, newline-terminated):
  *
- *   <ts>: TBK: <module> <file>:<line> [x<extra_hex>]\n
+ *   <ts>: TBK: [e<id_hex4> ]<module> <file>:<line> [x<extra_hex>]\n
+ *   <ts>: EVT: ERR: [e<id_hex4> ]<module> <message>\n
  *   <ts>: EVT: <kind> <module> [<detail>]\n
  *
  * <ts> = rtc_Time() seconds (rolls at 86400).
  * TBK = traceback-class event (WARN or ERROR).
  * EVT = everything else.
+ * e<id_hex4> = stable error ID (lwip_error_id_t in logging.h), lowercase hex;
+ *              omitted when the site has none (LWIP_E0000).
  */
 
 /* LOG_LINE_MAX must cover the worst case amongst all formatted lines below,
@@ -327,13 +330,17 @@ static void log_event_cb(const struct lwip_event *ev)
         uint32_t lnum  = LWIP_EVENT_CODE_LINE(ev->data.code.loc);
         uint16_t extra = ev->data.code.extra;
         const char *fname = lwip_debug_file_name(fid);
+        /* Stable error ID first (eXXXX), when the site has one. */
+        char eid[7] = "";
+        if (ev->eid)
+            snprintf(eid, sizeof eid, "e%04x ", (unsigned)ev->eid);
         if (extra)
-            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s %s:%lu x%x\n",
-                         (unsigned long)ts, mod, fname,
+            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s%s %s:%lu x%x\n",
+                         (unsigned long)ts, eid, mod, fname,
                          (unsigned long)lnum, (unsigned)extra);
         else
-            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s %s:%lu\n",
-                         (unsigned long)ts, mod, fname, (unsigned long)lnum);
+            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s%s %s:%lu\n",
+                         (unsigned long)ts, eid, mod, fname, (unsigned long)lnum);
         break;
     }
     case LWIP_EV_DEBUG:
@@ -355,8 +362,12 @@ static void log_event_cb(const struct lwip_event *ev)
     case LWIP_EV_ERROR_MSG:
     {
         const char *msg = ev->data.msg ? ev->data.msg : "";
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: ERR: %s %s\n",
-                     (unsigned long)ts, mod, msg);
+        if (ev->eid)
+            n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: ERR: e%04x %s %s\n",
+                         (unsigned long)ts, (unsigned)ev->eid, mod, msg);
+        else
+            n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: ERR: %s %s\n",
+                         (unsigned long)ts, mod, msg);
         break;
     }
     case LWIP_EV_STATE_CHG:

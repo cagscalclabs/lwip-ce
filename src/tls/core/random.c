@@ -100,7 +100,7 @@ static void tls_rng_log_health_failure(void)
 
     /* Source recovery continues after this event. Keep the failed test mask
      * in the traceback, but reserve ERROR for a terminal RNG failure. */
-    WARN_CODE(mask);
+    WARN_CODE(LWIP_E028F, mask);
 }
 
 static bool g_tls_rng_entropy_timer_running = false;
@@ -222,7 +222,7 @@ static bool tls_rng_request_q_push(uint8_t *out, size_t len, tls_random_request_
     node = (struct tls_rng_request_ctx *)mem_buffer_custom_malloc(sizeof(struct tls_rng_request_ctx));
     if (node == NULL)
     {
-        ERROR();
+        ERROR(LWIP_E0290);
         return false;
     }
 
@@ -578,7 +578,7 @@ static void tls_rng_fail(tls_rng_failure_t reason)
     g_tls_rng_state = TLS_RNG_FAILED;
     g_tls_rng_last_failure = reason;
     g_tls_rng_ready_deadline = 0;
-    ERROR_CODE(reason);
+    ERROR_CODE(LWIP_E0291, reason);
 }
 
 /* Run one lifecycle step. Source selection is intentionally a blocking scan;
@@ -625,7 +625,7 @@ static bool tls_drbg_entropy_gather_step(void)
     }
     if (g_tls_entropy_reserve_len >= target_bytes)
     {
-        ERROR_CODE(TLS_RNG_FAILURE_ACCOUNTING);
+        ERROR_CODE(LWIP_E0292, TLS_RNG_FAILURE_ACCOUNTING);
         return false;
     }
 
@@ -732,13 +732,13 @@ static bool tls_drbg_apply_entropy_reserve(void)
         !g_tls_drbg.seeded ||
         g_tls_entropy_reserve_len < TLS_HASH_DRBG_ENTROPY_BYTES)
     {
-        ERROR_CODE(TLS_RNG_FAILURE_ACCOUNTING);
+        ERROR_CODE(LWIP_E0293, TLS_RNG_FAILURE_ACCOUNTING);
         return false;
     }
     ok = tls_hash_drbg_reseed(&g_tls_drbg, g_tls_entropy_reserve);
     tls_entropy_reserve_reset();
     if (!ok)
-        ERROR_CODE(TLS_RNG_FAILURE_RESEED);
+        ERROR_CODE(LWIP_E0294, TLS_RNG_FAILURE_RESEED);
     return ok;
 }
 
@@ -1016,7 +1016,7 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
     }
     if (g_tls_rng_request_active || (g_tls_rng_request_q_head != NULL))
     {
-        ERROR_CODE(TLS_RNG_FAILURE_BUSY);
+        ERROR_CODE(LWIP_E0295, TLS_RNG_FAILURE_BUSY);
         goto fail;
     }
 
@@ -1047,7 +1047,7 @@ void *tls_random_bytes_ex(void *buffer, size_t len, uint16_t strength_bits)
             take = TLS_HASH_DRBG_MAX_REQUEST_BYTES;
         if (!tls_drbg_generate_bytes(&g_tls_drbg, out, take))
         {
-            ERROR_CODE(TLS_RNG_FAILURE_GENERATE);
+            ERROR_CODE(LWIP_E0296, TLS_RNG_FAILURE_GENERATE);
             goto fail;
         }
         out += take;
@@ -1194,7 +1194,7 @@ bool tls_request_random_bytes(uint8_t *out, size_t len, tls_random_request_cb_t 
     }
     else if (!tls_rng_request_q_push(out, len, cb, arg))
     {
-        ERROR();
+        ERROR(LWIP_E0297);
         return false;
     }
 

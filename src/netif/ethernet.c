@@ -320,13 +320,13 @@ ethernet_output(struct netif * netif, struct pbuf * p,
               ("ethernet_output: sending packet %p\n", (void *)p));
 
   /* send the packet */
-  LWIP_TRACE_RETURN(netif->linkoutput(netif, p));
+  LWIP_TRACE_RETURN(LWIP_E0124, netif->linkoutput(netif, p));
 
 pbuf_header_failed:
   LWIP_DEBUGF(ETHARP_DEBUG | LWIP_DBG_TRACE | LWIP_DBG_LEVEL_SERIOUS,
               ("ethernet_output: could not allocate room for header.\n"));
   LINK_STATS_INC(link.lenerr);
-  LWIP_TRACE_RETURN(ERR_BUF);
+  LWIP_TRACE_RETURN(LWIP_E0125, ERR_BUF);
 }
 
 #endif /* LWIP_ARP || LWIP_ETHERNET */
