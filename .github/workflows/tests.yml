@@ -1058,15 +1058,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # The artifacts API occasionally returns an empty body ("unexpected
+          # end of JSON input"), so retry each call before failing.
+          retry() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then return 0; fi
+              echo "Attempt $attempt failed; retrying in $((attempt * 5))s." >&2
+              sleep $((attempt * 5))
+            done
+            return 1
+          }
           for artifact_name in cemu-rom-encrypted cemu-rom-patched; do
-            artifact_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
-              --jq ".artifacts[] | select(.name == \"$artifact_name\") | .id" | head -1)
-            if [ -z "$artifact_id" ]; then
+            # Filter by name server-side so pagination can't hide the artifact.
+            ids=$(retry gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?name=$artifact_name&per_page=100" \
+              --jq '.artifacts[].id')
+            if [ -z "$ids" ]; then
               echo "No $artifact_name artifact was created."
               continue
             fi
-            gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
-            echo "Deleted $artifact_name artifact $artifact_id."
+            for artifact_id in $ids; do
+              retry gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+              echo "Deleted $artifact_name artifact $artifact_id."
+            done
           done
 
   gate_results:
