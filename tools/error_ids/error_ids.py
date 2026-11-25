@@ -9,7 +9,13 @@ Every ERROR/WARN-class call site carries a stable ID as its first argument:
 
 and each ID is one enumerator in logging.h with a trailing description:
 
-    LWIP_E0002 = 0x0002, // ServerHello too short. Trigger: `len < 4`
+    LWIP_E0002 = 0x0002, // ServerHello too short. Trigger: `len < 4` @peer:60 @tls:60
+
+The trailing @category:NN tags are evidence weights: how strongly this error,
+on its own, points at that category of bug (NN = confidence %, 1-100). The
+bug reporter combines them per category across a log. @propagate marks a site
+that only forwards a callee's failure. Categories are listed between the
+error-categories:begin/end markers in logging.h.
 
 The log writer prints the ID as eXXXX (lowercase hex) on TBK and EVT: ERR:
 lines, and the cagscalclabs bug reporter fetches logging.h at the reported
@@ -21,9 +27,12 @@ revision to explain each ID. IDs are therefore part of the on-disk log format:
 
 Commands
   assign   Give every call site that lacks an ID the next free ID, append its
-           enumerator with a drafted "[auto]" description, and rewrite the
-           site in place. Replace "[auto]" drafts with a hand-written
-           description when convenient.
+           enumerator with a drafted "[auto]" description and evidence tags,
+           and rewrite the site in place. Replace "[auto]" drafts with a
+           hand-written description when convenient.
+  redraft  Regenerate the description and tags of every "[auto]" entry.
+  tag      Draft evidence tags for entries that have none (--all: redraft the
+           tags of every entry, keeping descriptions).
   check    Verify the invariants above (used by CI). With --base REF, also
            verify that no ID present at REF was removed or renumbered.
 """
@@ -64,6 +73,11 @@ ID_RE = re.compile(r"^LWIP_E([0-9A-F]{4})$")
 ENTRY_RE = re.compile(
     r"^\s*LWIP_E([0-9A-F]{4})\s*=\s*0x([0-9A-Fa-f]{4})\s*,\s*//\s*(.*?)\s*$"
 )
+TAGS_RE = re.compile(r"((?:\s+@[A-Za-z_]\w*(?::\S*)?)+)\s*$")
+TAG_RE = re.compile(r"@([A-Za-z_]\w*)(?::(\S*))?")
+CAT_BEGIN = "error-categories:begin"
+CAT_END = "error-categories:end"
+FLAGS = {"propagate"}
 SITE_RE = re.compile(r"\b(" + "|".join(sorted(SITE_MACROS, key=len, reverse=True)) + r")\s*\(")
 MAX_ID = 0xFFFF
 
@@ -394,6 +408,218 @@ def draft_description(site: Site, src: str, code: str, comments: list[Comment]) 
 
 
 # ---------------------------------------------------------------------------
+# Evidence-tag drafting
+#
+# Heuristic first pass, meant to be reviewed: the file says which subsystem an
+# error belongs to, and the trigger refines it (an allocation that came back
+# NULL is a memory problem wherever it happens; a NULL parameter is caller
+# misuse; a bounds check while parsing received bytes is a misbehaving peer).
+# ---------------------------------------------------------------------------
+
+# (path substring, category, confidence); first match wins.
+FILE_CATEGORY = [
+    ("tls/core/x509.c", "cert", 70),
+    ("tls/core/truststore.c", "cert", 70),
+    ("tls/core/ocsp.c", "cert", 65),
+    ("altcp_tls/altcp_tls_ocsp.c", "cert", 65),
+    ("tls/core/primitives/", "crypto", 60),
+    ("tls/core/hash.c", "crypto", 60),
+    ("tls/core/hmac.c", "crypto", 60),
+    ("tls/core/hkdf.c", "crypto", 60),
+    ("tls/core/rsa.c", "crypto", 60),
+    ("tls/core/random.c", "crypto", 70),
+    ("tls/core/key.c", "crypto", 55),
+    ("tls/core/passwords.c", "crypto", 55),
+    ("tls/core/", "tls", 60),
+    ("apps/altcp_tls/", "tls", 55),
+    ("apps/altcp_ws/", "ws", 60),
+    ("core/dns.c", "dns", 70),
+    ("core/udp.c", "transport", 50),
+    ("core/ipv4/", "wire", 50),
+    ("netif/", "wire", 50),
+    ("drivers/usb_ethernet.c", "usb", 70),
+    ("drivers/mem.c", "memory", 70),
+    ("core/app_config.c", "config", 60),
+    ("core/log_file.c", "storage", 60),
+    ("core/dispatch.c", "logic", 45),
+    ("lwIP.c", "transport", 50),
+]
+
+ALLOC_CALL = re.compile(r"(alloc|malloc|calloc|realloc|_new\b|^new_|_create|create_|_dup\b|strdup|charge|_grow\b|pbuf_alloc)", re.I)
+ALLOC_TEXT = re.compile(r"\bERR_MEM\b|out of memory|\bOOM\b|could not allocate|alloc(ation)? fail|\bno memory\b|\bexhaust", re.I)
+PEER_FUNC = re.compile(r"(recv|parse|decode|consume|feed|_input|process|_rx|handle_rx|verify|reasm|digit_pair|time_to_unix|import)", re.I)
+PEER_TRIGGER = re.compile(r"(offset|_end\b|\blen\b|_len\b|data\[|\.tag\b|asn1|tls_asn1|!=|>|<|\bcase\b|default|\btag\b)")
+STATE_TRIGGER = re.compile(r"->state\b|\bstate\s*!=|unexpected|\bflags\b.*&")
+UNUSED_KINDS = {"else branch"}
+
+
+def function_params(code: str, pos: int) -> set[str]:
+    """Parameter names of the function enclosing pos (best effort)."""
+    depth, body_open = 0, -1
+    for j in range(pos - 1, -1, -1):
+        if code[j] == "}":
+            depth += 1
+        elif code[j] == "{":
+            if depth == 0:
+                body_open = j
+            else:
+                depth -= 1
+    if body_open < 0:
+        return set()
+    hdr = code[:body_open].rstrip()
+    if not hdr.endswith(")"):
+        return set()
+    o = matching_open(code, len(hdr) - 1)
+    names = set()
+    for part in code[o + 1:len(hdr) - 1].split(","):
+        m = re.search(r"(\w+)\s*(\[[^\]]*\])?\s*$", part.strip())
+        if m and m.group(1) != "void":
+            names.add(m.group(1))
+    return names
+
+
+def trigger_terms(trigger: str) -> list[str]:
+    t = re.sub(r"\s*\((case [^)]*|default)\)\s*$", "", trigger.strip())
+    return [x.strip() for x in re.split(r"\|\|", t) if x.strip()]
+
+
+def is_param_check(terms: list[str], params: set[str]) -> bool:
+    """Every OR-term is a NULL/zero/range test of a parameter: caller misuse."""
+    if not terms or not params:
+        return False
+    for term in terms:
+        for t in re.split(r"&&", term.strip("() ")):
+            t = t.strip("() ")
+            m = (re.fullmatch(r"!\s*(\w+)(?:->\w+)*", t)
+                 or re.fullmatch(r"(\w+)(?:->\w+)*\s*[!=]=\s*(?:NULL|0)", t)
+                 or re.fullmatch(r"(\w+)\s*(?:<|>|<=|>=)\s*\w+", t))
+            if not m or m.group(1) not in params:
+                return False
+    return True
+
+
+CALL_TERM = re.compile(r"!?\s*(\w+)\s*\(.*\)\s*(?:(?:!=|==)\s*[\w.>-]+)?")
+CALLEE_CATEGORY = [
+    (re.compile(r"asn1|parse|decode|pem|der_|digit"), "peer", 55),
+    (re.compile(r"hkdf|hmac|hash|aes|rsa|drbg|random|rng|mgf|ecdh|x25519|p256|aead|cipher|pbkdf"), "crypto", 40),
+    (re.compile(r"x509|cert|truststore|ocsp"), "cert", 45),
+]
+
+
+def failed_calls(terms: list[str]) -> list[str] | None:
+    """Callee names when every OR-term is a failed function call, else None."""
+    names = []
+    for t in terms:
+        m = CALL_TERM.fullmatch(t.strip())
+        if not m or m.group(1) in KEYWORDS or m.group(1) == "sizeof":
+            return None
+        names.append(m.group(1))
+    return names or None
+
+
+def alloc_checked_var(terms: list[str], code: str, pos: int) -> bool:
+    """A single NULL test of a variable that was last assigned from an allocator."""
+    if len(terms) != 1:
+        return False
+    t = terms[0].strip("() ")
+    m = re.fullmatch(r"!\s*([\w>.\-]+)", t) or re.fullmatch(r"([\w>.\-]+)\s*==\s*NULL", t)
+    if not m:
+        return False
+    var = re.escape(m.group(1))
+    window = code[max(0, pos - 3000):pos]
+    assigns = list(re.finditer(var + r"\s*=\s*(?:\([^()]*\)\s*)?(\w+)\s*\(", window))
+    return bool(assigns) and bool(ALLOC_CALL.search(assigns[-1].group(1)))
+
+
+def draft_tags(site: Site, src: str, code: str, desc: str) -> str:
+    rel = site.path.relative_to(ROOT).as_posix()
+    cat, conf = next(((c, n) for sub, c, n in FILE_CATEGORY if sub in rel), ("logic", 30))
+    func = enclosing_function(code, site.name_pos)
+    fl = func.lower()
+    tm = re.search(r"Trigger: `(.*)`\s*$", desc)
+    trigger = tm.group(1) if tm else ""
+    terms = trigger_terms(trigger)
+    tags: dict[str, int] = {}
+
+    def add(c: str, n: int) -> None:
+        tags[c] = max(tags.get(c, 0), n)
+
+    # Subsystem refinements by function name.
+    if cat == "tls" and re.search(r"cert|x509", fl):
+        cat, conf = "cert", 65
+    if "dns" in fl and cat != "dns":
+        add("dns", 60)
+
+    # Propagation: the callee's own ID carries the evidence.
+    if "propagates a failure from" in desc:
+        callee = re.search(r"from (\w+)\(\)", desc)
+        if callee and ALLOC_CALL.search(callee.group(1)):
+            add("memory", 70)
+        add(cat, 20)
+        return render_tags(tags, site, propagate=True)
+
+    alloc = ALLOC_TEXT.search(desc) or alloc_checked_var(terms, code, site.name_pos)
+    param = is_param_check(terms, function_params(code, site.name_pos))
+    callees = None if (alloc or param) else failed_calls(terms)
+
+    if callees:
+        # A callee reported failure. Whatever it hit is the real evidence
+        # (and has its own ID if it logs), so weigh this site lower.
+        add(cat, 35)
+        for name in callees:
+            nl = name.lower()
+            if ALLOC_CALL.search(nl):
+                add("memory", 70)
+            for rx, c, n in CALLEE_CATEGORY:
+                if rx.search(nl):
+                    add(c, n)
+                    break
+        if "peer" in tags and cat in ("tls", "cert"):
+            add(cat, 50)
+    elif re.search(r"\breturns ERR_ARG\b", desc) and not trigger:
+        add("api", 60)
+        add(cat, 25)
+    elif alloc:
+        add("memory", 85)
+        add(cat, 20)
+    elif param:
+        add("api", 75)
+        add(cat, 20)
+    else:
+        add(cat, conf)
+        if re.search(r"hostname|san_matches", fl):
+            add("cert", 85)
+        if "validity" in fl or "time_to_unix" in fl:
+            add("cert", 80)
+        if re.search(r"\bERR_RTE\b|no route|gateway", desc):
+            add("wire", 60)
+            add("config", 40)
+        if re.search(r"\bERR_IF\b|shutting_down|xmit_fatal|usb_", desc):
+            add("usb", 70)
+        if re.search(r"time(d)? ?out", desc, re.I):
+            add("transport", 50)
+        peer_area = cat in ("tls", "cert", "ws", "dns", "wire", "transport")
+        bare = trigger.replace("->", ".")
+        if peer_area and PEER_FUNC.search(fl) and trigger not in UNUSED_KINDS \
+                and PEER_TRIGGER.search(bare) and not STATE_TRIGGER.search(trigger):
+            add("peer", 60 if cat in ("tls", "cert", "ws") else 45)
+        if STATE_TRIGGER.search(trigger):
+            add("logic", 45)
+    return render_tags(tags, site)
+
+
+def render_tags(tags: dict[str, int], site: Site, propagate: bool = False) -> str:
+    scale = 0.6 if SITE_MACROS.get(site.macro) == "WARN" else 1.0
+    out = []
+    for c, n in sorted(tags.items(), key=lambda kv: (-kv[1], kv[0])):
+        n = int(round(n * scale / 5.0) * 5)
+        out.append(f"@{c}:{min(95, max(5, n))}")
+    if propagate:
+        out.append("@propagate")
+    return " ".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -402,7 +628,33 @@ class Registry:
     text: str
     begin: int        # index just after the begin-marker line
     end: int          # index of the end marker line start
-    entries: dict[int, str]
+    entries: dict[int, str]               # description, tags stripped
+    tags: dict[int, str]                  # raw tag text ("@tls:60 @peer:55")
+
+
+def split_tags(text: str) -> tuple[str, str]:
+    padded = " " + text
+    m = TAGS_RE.search(padded)
+    if not m:
+        return text, ""
+    return padded[:m.start()].strip(), m.group(1).strip()
+
+
+def parse_tags(tags: str) -> list[tuple[str, str | None]]:
+    return [(m.group(1), m.group(2)) for m in TAG_RE.finditer(tags)]
+
+
+def load_categories(text: str) -> dict[str, str]:
+    """Category vocabulary from the error-categories block in logging.h."""
+    b, e = text.find(CAT_BEGIN), text.find(CAT_END)
+    if b < 0 or e < b:
+        sys.exit(f"{REGISTRY.relative_to(ROOT)}: error-categories markers not found")
+    cats = {}
+    for ln in text[text.index("\n", b) + 1:text.rfind("\n", 0, e)].splitlines():
+        m = re.match(r"^\s*\*?\s*([a-z]+)\s{2,}(.+?)\s*$", ln)
+        if m:
+            cats[m.group(1)] = m.group(2)
+    return cats
 
 
 def load_registry(text: str | None = None) -> Registry:
@@ -414,6 +666,7 @@ def load_registry(text: str | None = None) -> Registry:
     begin = text.index("\n", b) + 1
     end = text.rfind("\n", 0, e) + 1
     entries: dict[int, str] = {}
+    tags: dict[int, str] = {}
     for ln in text[begin:end].splitlines():
         if not ln.strip():
             continue
@@ -425,12 +678,12 @@ def load_registry(text: str | None = None) -> Registry:
             sys.exit(f"{REGISTRY.relative_to(ROOT)}: LWIP_E{m.group(1)} has value 0x{m.group(2)}")
         if num in entries:
             sys.exit(f"{REGISTRY.relative_to(ROOT)}: LWIP_E{num:04X} defined twice")
-        entries[num] = m.group(3)
-    return Registry(text, begin, end, entries)
+        entries[num], tags[num] = split_tags(m.group(3))
+    return Registry(text, begin, end, entries, tags)
 
 
-def entry_line(num: int, desc: str) -> str:
-    return f"    LWIP_E{num:04X} = 0x{num:04X}, // {desc}\n"
+def entry_line(num: int, desc: str, tags: str = "") -> str:
+    return f"    LWIP_E{num:04X} = 0x{num:04X}, // {desc}" + (f" {tags}" if tags else "") + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +718,7 @@ def cmd_assign(_args: argparse.Namespace) -> int:
             if next_id > MAX_ID:
                 sys.exit("error-ID space exhausted")
             desc = draft_description(s, src, code, comments)
-            new_entries.append(entry_line(next_id, desc))
+            new_entries.append(entry_line(next_id, desc, draft_tags(s, src, code, desc)))
             pieces.append(src[last:s.open_pos + 1])
             pieces.append(f"LWIP_E{next_id:04X}" + (", " if s.args else ""))
             last = s.open_pos + 1
@@ -485,24 +738,48 @@ def cmd_assign(_args: argparse.Namespace) -> int:
 def cmd_redraft(_args: argparse.Namespace) -> int:
     """Regenerate [auto] descriptions from the current call sites."""
     reg = load_registry()
-    fresh: dict[int, str] = {}
+    fresh: dict[int, tuple[str, str]] = {}
     for _path, src, kind, comments, sites in scan():
         code = code_only(src, kind)
         for s in sites:
             if s.eid is not None and reg.entries.get(s.eid, "").startswith("[auto]"):
-                fresh[s.eid] = draft_description(s, src, code, comments)
+                desc = draft_description(s, src, code, comments)
+                fresh[s.eid] = (desc, draft_tags(s, src, code, desc))
+    changed = rewrite_entries(reg, fresh)
+    print(f"redrafted {changed} [auto] entr{'y' if changed == 1 else 'ies'}")
+    return 0
+
+
+def rewrite_entries(reg: Registry, fresh: dict[int, tuple[str, str]]) -> int:
     lines = reg.text[reg.begin:reg.end].splitlines(keepends=True)
     changed = 0
     for i, ln in enumerate(lines):
         m = ENTRY_RE.match(ln)
         if m and int(m.group(1), 16) in fresh:
             num = int(m.group(1), 16)
-            new = entry_line(num, fresh[num])
+            new = entry_line(num, *fresh[num])
             if new != ln:
                 lines[i] = new
                 changed += 1
     REGISTRY.write_text(reg.text[:reg.begin] + "".join(lines) + reg.text[reg.end:], encoding="utf-8")
-    print(f"redrafted {changed} [auto] description(s)")
+    return changed
+
+
+def cmd_tag(args: argparse.Namespace) -> int:
+    """Draft evidence tags from each entry's current description and site."""
+    reg = load_registry()
+    fresh: dict[int, tuple[str, str]] = {}
+    for _path, src, kind, _comments, sites in scan():
+        code = code_only(src, kind)
+        for s in sites:
+            if s.eid is None or s.eid not in reg.entries:
+                continue
+            if reg.tags.get(s.eid) and not args.all:
+                continue
+            desc = reg.entries[s.eid]
+            fresh[s.eid] = (desc, draft_tags(s, src, code, desc))
+    changed = rewrite_entries(reg, fresh)
+    print(f"tagged {changed} entr{'y' if changed == 1 else 'ies'}")
     return 0
 
 
@@ -524,13 +801,29 @@ def cmd_check(args: argparse.Namespace) -> int:
             if s.eid not in reg.entries:
                 problems.append(f"{where}: LWIP_E{s.eid:04X} is not defined in logging.h")
 
+    cats = load_categories(reg.text)
     for num, desc in sorted(reg.entries.items()):
         if num == 0:
             continue
+        name = f"LWIP_E{num:04X}"
         if not desc:
-            problems.append(f"LWIP_E{num:04X}: missing description")
+            problems.append(f"{name}: missing description")
         if num not in used and "RETIRED" not in desc:
-            problems.append(f"LWIP_E{num:04X}: defined but unused; mark its description RETIRED")
+            problems.append(f"{name}: defined but unused; mark its description RETIRED")
+        weighted = 0
+        for tag, val in parse_tags(reg.tags.get(num, "")):
+            if tag in FLAGS:
+                if val is not None:
+                    problems.append(f"{name}: @{tag} takes no value")
+            elif tag not in cats:
+                problems.append(f"{name}: unknown evidence category @{tag} "
+                                f"(known: {', '.join(sorted(cats))})")
+            elif val is None or not val.isdigit() or not 1 <= int(val) <= 100:
+                problems.append(f"{name}: @{tag} needs a confidence 1-100 (e.g. @{tag}:60)")
+            else:
+                weighted += 1
+        if weighted == 0 and "RETIRED" not in desc:
+            problems.append(f"{name}: no evidence tags (run tools/error_ids/error_ids.py tag)")
 
     if args.base:
         try:
@@ -559,11 +852,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("assign", help="assign IDs to call sites that lack one")
-    sub.add_parser("redraft", help="regenerate [auto] descriptions from current call sites")
+    sub.add_parser("redraft", help="regenerate [auto] descriptions and tags from current call sites")
+    t = sub.add_parser("tag", help="draft evidence tags for entries that have none")
+    t.add_argument("--all", action="store_true", help="redraft tags on every entry (descriptions are kept)")
     c = sub.add_parser("check", help="verify registry invariants")
     c.add_argument("--base", help="git ref to compare against for append-only check")
     args = ap.parse_args()
-    return {"assign": cmd_assign, "redraft": cmd_redraft, "check": cmd_check}[args.cmd](args)
+    return {"assign": cmd_assign, "redraft": cmd_redraft, "tag": cmd_tag,
+            "check": cmd_check}[args.cmd](args)
 
 
 if __name__ == "__main__":

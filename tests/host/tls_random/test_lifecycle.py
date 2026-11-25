@@ -25,10 +25,10 @@ MOCKS = f'''\
 #define LWIP_DISPATCH_TLS_RNG_REQUEST 0
 #define TLS_SHA256_DIGEST_LEN 32
 #define TLS_HASH_SHA256 1
-#define ERROR_CODE(x) ((void)(x))
-#define ERROR() ((void)0)
-#define WARN_CODE(x) ((void)(x))
-#define ERROR_INFO(x) ((void)(x))
+#define ERROR_CODE(eid, x) ((void)(x))
+#define ERROR(eid) ((void)0)
+#define WARN_CODE(eid, x) ((void)(x))
+#define ERROR_INFO(eid, x) ((void)(x))
 #define INFO(x) ((void)(x))
 #define DEBUG() ((void)0)
 

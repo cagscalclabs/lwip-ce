@@ -12,7 +12,7 @@ header = ["build/lwip.h", "build/cryptography.h", "build/parsers.h", "build/wire
 
 [app]
 name = "lwIP"
-version = "3.0.0"
+version = "3.2.2"
 init = "lwip_init_runtime_internal"
 linker_script = "tools/build/meta/linker_script_lwip.ld"
 retain_removed = true

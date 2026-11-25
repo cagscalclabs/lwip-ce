@@ -30,7 +30,7 @@ c_test = r'''
 #include <stdint.h>
 #include <string.h>
 
-#define ERROR_CODE(x) ((void)(x))
+#define ERROR_CODE(eid, x) ((void)(x))
 #define TLS_HANDSHAKE_CLIENT_HELLO 1
 #define TLS_HANDSHAKE_SERVER_HELLO 2
 #define TLS_VERSION_1_3 0x0304

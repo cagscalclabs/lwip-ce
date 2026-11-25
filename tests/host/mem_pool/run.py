@@ -23,8 +23,8 @@ PROLOGUE = r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define ERROR() ((void)0)
-#define ERROR_CODE(x) ((void)0)
+#define ERROR(eid) ((void)0)
+#define ERROR_CODE(eid, x) ((void)0)
 static void tls_secure_memzero(void *p, size_t n) { memset(p, 0, n); }
 #ifndef SIZE_MAX
 #define SIZE_MAX ((size_t)-1)

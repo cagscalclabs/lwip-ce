@@ -17,10 +17,10 @@ typedef int ip_addr_t;
 #define TCP_WRITE_FLAG_COPY 1
 #define PBUF_RAM 0
 #define PBUF_RAW 0
-#define ERROR() ((void)0)
-#define ERROR_CODE(x) ((void)(x))
-#define WARN() ((void)0)
-#define WARN_CODE(x) ((void)(x))
+#define ERROR(eid) ((void)0)
+#define ERROR_CODE(eid, x) ((void)(x))
+#define WARN(eid) ((void)0)
+#define WARN_CODE(eid, x) ((void)(x))
 struct pbuf { struct pbuf *next; void *payload; u16_t tot_len, len; };
 struct altcp_pcb;
 typedef void (*altcp_err_fn)(void *, err_t);
