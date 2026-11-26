@@ -139,6 +139,8 @@ Installing & Using lwIP-CE Application (as End User)
 
 ``appinst/`` contains the lwIP-CE installer: a set of AppVars and the installer program. Send the entire contents of that directory and ``lwip.8xv`` to your TI-84+ CE, then run ``prgmINSTALL`` (the file ``lwIPINST.8xp``). This installs lwIP-CE as a TI Flash Application.
 
+For TLS (HTTPS and other secure connections), also send ``lwIPCERT.8xv``, the root certificate store bundled with the release. Without it, TLS connections fail certificate validation. ``TRUSTSTORE.txt`` in the release records when the bundled store was created. Newer root sets are published at the `truststore-latest <https://github.com/cagscalclabs/lwip-ce/releases/tag/truststore-latest>`_ release; send a newer ``lwIPCERT.8xv`` to replace the bundled one. If a newer store uses a format your lwIP-CE version doesn't support, TLS reports a truststore version mismatch; update lwIP-CE as well.
+
 .. note::
 
     The installer cannot overwrite an Application that already exists. To update, delete the old Application first, then run ``GarbageCollect`` if the calculator asks for it, before installing the new version.

@@ -13,6 +13,7 @@
 #include "../lwip-imports.h"
 
 #include <sys/rtc.h>
+#include "rtc_tod.h"
 
 _Static_assert(sizeof(struct pcap) == PCAP_REC_HDR_LEN, "struct pcap must match pcap_record.h");
 _Static_assert(offsetof(struct pcap, ts) == PCAP_REC_OFF_TS, "pcap ts offset");
@@ -131,7 +132,7 @@ static uint32_t pcap_timestamp(void)
 {
     static uint32_t cur_sec = UINT32_MAX;
     static u32_t sec_anchor_ms;
-    uint32_t sec = (uint32_t)rtc_Time() % PCAP_TS_SECS_PER_DAY;
+    uint32_t sec = rtc_tod_seconds();
     u32_t now = sys_now();
     if (sec != cur_sec)
     {

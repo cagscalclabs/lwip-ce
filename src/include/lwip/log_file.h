@@ -56,6 +56,16 @@ bool lwip_log_file_start(uint8_t max_archive_slots);
  * their own captured logs, not build another path to them. */
 void lwip_log_file_flush(void);
 
+/** Record that the RTC is about to be changed, regardless of log level:
+ *
+ *    <ts> <source>: Setting clock from <from> to <to>
+ *
+ * <ts> is the clock before the change; lines after it use the new clock, so
+ * this is what explains a jump in log (and capture) times. <from>/<to> are
+ * "YYYY-MM-DD HH:MM:SS" local time. No-op if the logger is not running.
+ * @internal Called by sntp_time.c just before it writes the RTC. */
+void lwip_log_file_clock_set(const char *source, const char *from, const char *to);
+
 /** Stop the file logger, flush remaining data, restore previous callback.
  * @internal Not part of the public API; see lwip_log_file_start(). */
 void lwip_log_file_stop(void);

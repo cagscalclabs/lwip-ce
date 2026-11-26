@@ -2007,8 +2007,12 @@ static void services_arm(void)
 /* ============================================================
  * Connect/handshake inactivity watchdog
  *
- * A socket in RESOLVING / CONNECTING / CONNECTED is failed only after
- * `connect_window` ms in which *that socket* made no progress. Progress is
+ * A socket in RESOLVING / CONNECTING is failed only after
+ * `connect_window` ms in which *that socket* made no progress. Once the
+ * socket is CONNECTED the watchdog stops: an idle established session is
+ * normal (an IRC client can go minutes between server PINGs, issue #113),
+ * and a peer that really vanished is caught by TCP's own retransmit give-up
+ * and keepalive. Progress is
  * this socket's own traffic: received and acknowledged bytes, a completed
  * connect, a completed lookup, or an application write (see
  * conn_note_activity). Interface-wide line activity deliberately does not
@@ -2027,10 +2031,6 @@ static uint32_t conn_window_ms(const struct lwip_socket *conn)
     return 30000u; /* 30 s default inactivity window */
 }
 
-/* Returns true for any socket state that the inactivity watchdog should
- * monitor.  WAITING_SERVICES is excluded: services may take a while and
- * the connect_deadline for that phase is managed by conn_waiting_services_poll,
- * not here.  CONNECTED is included so a silent/hung session times out too. */
 /* Note progress on this socket only. The inactivity deadline is extended by
  * this socket's own traffic, never by unrelated frames on the wire (see
  * conn_connect_watchdog). */
@@ -2041,13 +2041,16 @@ static void conn_note_activity(struct lwip_socket *conn)
 }
 
 
+/* Returns true for any socket state that the inactivity watchdog should
+ * monitor.  WAITING_SERVICES is excluded: services may take a while and
+ * the connect_deadline for that phase is managed by conn_waiting_services_poll,
+ * not here.  CONNECTED is excluded: see the block comment above. */
 static bool conn_has_inactivity_timeout(const struct lwip_socket *conn)
 {
     if (!conn || !conn->connect_timeout_ms)
         return false;
     return conn->status == LWIP_STATUS_RESOLVING  ||
-           conn->status == LWIP_STATUS_CONNECTING ||
-           conn->status == LWIP_STATUS_CONNECTED;
+           conn->status == LWIP_STATUS_CONNECTING;
 }
 
 

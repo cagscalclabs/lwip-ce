@@ -12,17 +12,32 @@
 #include "lwip/app_config.h"
 #include "lwip/logging.h"
 #include "lwip/mem.h"
+#include "../lwIP.h"
 #include "../lwip-imports.h"
+#include "../drivers/rtc_tod.h"
 
 /* Log line format (plain ASCII, newline-terminated):
  *
- *   <ts>: TBK: [e<id_hex4> ]<module> <file>:<line> [x<extra_hex>]\n
- *   <ts>: EVT: ERR: [e<id_hex4> ]<module> <message>\n
- *   <ts>: EVT: <kind> <module> [<detail>]\n
- *   <ts>: EVT: WARN: e<id> <module> tcp retry <why> #<n> <lport>><rport> seq=<hex> len=<n> fl=<SAFPR>\n
- *   <ts>: EVT: ERR: e<id> <module> tcp give-up <why> after <n> <lport>><rport> seq=<hex> len=<n> fl=<SAFPR>\n
+ *   <ts> TBK: [e<id_hex4> ]<module> <file>:<line> [x<extra_hex>]\n
+ *   <ts> EVT: ERR: [e<id_hex4> ]<module> <message>\n
+ *   <ts> EVT: <kind> <module> [<detail>]\n
+ *   <ts> EVT: WARN: e<id> <module> tcp retry <why> #<n> <lport>><rport> seq=<hex> len=<n> fl=<SAFPR>\n
+ *   <ts> EVT: ERR: e<id> <module> tcp give-up <why> after <n> <lport>><rport> seq=<hex> len=<n> fl=<SAFPR>\n
+ *   <ts> INFO: Session Start: Version <ver>; Date: YYYY-MM-DD\n
+ *   <ts> <source>: Setting clock from <YYYY-MM-DD HH:MM:SS> to <YYYY-MM-DD HH:MM:SS>\n
  *
- * <ts> = rtc_Time() seconds (rolls at 86400).
+ * <ts> = HH:MM:SS, local wall-clock time from the RTC (rtc_tod.h): the clock
+ * the user sets, so a time the user remembers maps straight onto log lines.
+ * Capture records use the same clock. Whole seconds; log order is file order.
+ * The Session Start line opens every logging session (it is written directly,
+ * bypassing the event log level, so it is always present) and gives the date,
+ * so each session's times can be placed on a calendar: a later <ts> smaller
+ * than the one before it means midnight passed. When lwIP-CE itself sets the
+ * clock (SNTP sync, or raising an implausibly early clock), a "Setting clock"
+ * line, stamped with the old clock, is written first, regardless of log level.
+ * A change made in TI-OS while the stack is not running leaves no line.
+ * Logs from before v3.2.3 stamp lines with rtc_Time() as "<counter>: ", a
+ * free-running seconds counter unrelated to the time of day.
  * TBK = traceback-class event (WARN or ERROR).
  * EVT = everything else.
  * e<id_hex4> = stable error ID (lwip_error_id_t in logging.h), lowercase hex;
@@ -269,8 +284,6 @@ static const char *kind_str(uint8_t kind)
     }
 }
 
-static uint32_t log_ts(void) { return rtc_Time(); }
-
 static const char *tcp_reason_str(uint8_t reason)
 {
     switch ((lwip_tcp_retry_reason_t)reason)
@@ -357,7 +370,8 @@ static void log_event_cb(const struct lwip_event *ev)
 
     char *line = g_log_line;
     int n = 0;
-    uint32_t ts = log_ts();
+    char ts[9];
+    rtc_tod_format(rtc_tod_seconds(), ts);
     const char *mod = lwip_debug_module_name(ev->module);
 
     switch (ev->kind)
@@ -374,12 +388,12 @@ static void log_event_cb(const struct lwip_event *ev)
         if (ev->eid)
             snprintf(eid, sizeof eid, "e%04x ", (unsigned)ev->eid);
         if (extra)
-            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s%s %s:%lu x%x\n",
-                         (unsigned long)ts, eid, mod, fname,
+            n = snprintf(line, LOG_LINE_MAX, "%s TBK: %s%s %s:%lu x%x\n",
+                         ts, eid, mod, fname,
                          (unsigned long)lnum, (unsigned)extra);
         else
-            n = snprintf(line, LOG_LINE_MAX, "%lu: TBK: %s%s %s:%lu\n",
-                         (unsigned long)ts, eid, mod, fname, (unsigned long)lnum);
+            n = snprintf(line, LOG_LINE_MAX, "%s TBK: %s%s %s:%lu\n",
+                         ts, eid, mod, fname, (unsigned long)lnum);
         break;
     }
     case LWIP_EV_DEBUG:
@@ -387,49 +401,49 @@ static void log_event_cb(const struct lwip_event *ev)
         uint8_t  fid  = LWIP_EVENT_CODE_FILE(ev->data.code.loc);
         uint32_t lnum = LWIP_EVENT_CODE_LINE(ev->data.code.loc);
         const char *fname = lwip_debug_file_name(fid);
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: DBG %s %s:%lu\n",
-                     (unsigned long)ts, mod, fname, (unsigned long)lnum);
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: DBG %s %s:%lu\n",
+                     ts, mod, fname, (unsigned long)lnum);
         break;
     }
     case LWIP_EV_INFO:
     {
         const char *msg = ev->data.msg ? ev->data.msg : "";
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: INFO %s %s\n",
-                     (unsigned long)ts, mod, msg);
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: INFO %s %s\n",
+                     ts, mod, msg);
         break;
     }
     case LWIP_EV_ERROR_MSG:
     {
         const char *msg = ev->data.msg ? ev->data.msg : "";
         if (ev->eid)
-            n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: ERR: e%04x %s %s\n",
-                         (unsigned long)ts, (unsigned)ev->eid, mod, msg);
+            n = snprintf(line, LOG_LINE_MAX, "%s EVT: ERR: e%04x %s %s\n",
+                         ts, (unsigned)ev->eid, mod, msg);
         else
-            n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: ERR: %s %s\n",
-                         (unsigned long)ts, mod, msg);
+            n = snprintf(line, LOG_LINE_MAX, "%s EVT: ERR: %s %s\n",
+                         ts, mod, msg);
         break;
     }
     case LWIP_EV_STATE_CHG:
     {
         const char *sname = lwip_debug_state_change_name(ev->data.state.change_event);
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: STATE %s %s\n",
-                     (unsigned long)ts, mod, sname);
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: STATE %s %s\n",
+                     ts, mod, sname);
         break;
     }
     case LWIP_EV_IO_FILE:
     {
         const char *dir  = (ev->data.file.dir == LWIP_IO_READ) ? "RD" : "WR";
         const char *name = ev->data.file.name ? ev->data.file.name : "?";
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: IOFILE %s %s %s %lu\n",
-                     (unsigned long)ts, mod, dir, name,
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: IOFILE %s %s %s %lu\n",
+                     ts, mod, dir, name,
                      (unsigned long)ev->data.file.bytes);
         break;
     }
     case LWIP_EV_IO_ETH:
     {
         const char *dir = (ev->data.eth.dir == LWIP_IO_RX) ? "RX" : "TX";
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: IOETH %s %s %lu\n",
-                     (unsigned long)ts, mod, dir,
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: IOETH %s %s %lu\n",
+                     ts, mod, dir,
                      (unsigned long)ev->data.eth.bytes);
         break;
     }
@@ -441,8 +455,8 @@ static void log_event_cb(const struct lwip_event *ev)
         tcp_flags_str(t->flags, fl);
         bool giveup = ev->kind == LWIP_EV_TCP_GIVEUP;
         n = snprintf(line, LOG_LINE_MAX,
-                     "%lu: EVT: %s: e%04x %s tcp %s %s %s%u %u>%u seq=%08lx len=%u fl=%s\n",
-                     (unsigned long)ts, giveup ? "ERR" : "WARN", (unsigned)ev->eid, mod,
+                     "%s EVT: %s: e%04x %s tcp %s %s %s%u %u>%u seq=%08lx len=%u fl=%s\n",
+                     ts, giveup ? "ERR" : "WARN", (unsigned)ev->eid, mod,
                      giveup ? "give-up" : "retry", tcp_reason_str(t->reason),
                      giveup ? "after " : "#", (unsigned)t->count,
                      (unsigned)t->local_port, (unsigned)t->remote_port,
@@ -450,14 +464,14 @@ static void log_event_cb(const struct lwip_event *ev)
         break;
     }
     case LWIP_EV_POWER:
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: PWR %s sub=%u chrg=%u\n",
-                     (unsigned long)ts, mod,
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: PWR %s sub=%u chrg=%u\n",
+                     ts, mod,
                      (unsigned)ev->data.power.subtype,
                      (unsigned)ev->data.power.charging);
         break;
     default:
-        n = snprintf(line, LOG_LINE_MAX, "%lu: EVT: %s %s\n",
-                     (unsigned long)ts, kind_str(ev->kind), mod);
+        n = snprintf(line, LOG_LINE_MAX, "%s EVT: %s %s\n",
+                     ts, kind_str(ev->kind), mod);
         break;
     }
 
@@ -469,6 +483,47 @@ static void log_event_cb(const struct lwip_event *ev)
      * self-contained for diagnosing a failure after the fact. */
     if (ev->kind == LWIP_EV_ERROR)
         log_dump_traceback();
+}
+
+/* First line of every session; see the format note at the top. Staged
+ * directly rather than emitted as an event, so no log level filters it. */
+static void log_session_start_line(void)
+{
+    uint8_t day, month, day2, month2;
+    uint16_t year, year2;
+    uint32_t tod;
+    char ts[9];
+
+    /* Date, time, date again: retry if midnight passed between the reads. */
+    do {
+        boot_GetDate(&day, &month, &year);
+        tod = rtc_tod_seconds();
+        boot_GetDate(&day2, &month2, &year2);
+    } while (day != day2 || month != month2 || year != year2);
+    rtc_tod_format(tod, ts);
+
+    int n = snprintf(g_log_line, LOG_LINE_MAX,
+                     "%s INFO: Session Start: Version %s; Date: %04u-%02u-%02u\n",
+                     ts, LWIP_CE_VERSION_STRING, (unsigned)year,
+                     (unsigned)month, (unsigned)day);
+    if (n > 0)
+        log_stage_text(g_log_line, (size_t)n < LOG_LINE_MAX ? (size_t)n
+                                                            : LOG_LINE_MAX - 1u);
+}
+
+/* Clock-change line; see lwip_log_file_clock_set() in log_file.h. Staged
+ * directly, like the Session Start line, so no log level filters it. */
+void lwip_log_file_clock_set(const char *source, const char *from, const char *to)
+{
+    if (!g_running)
+        return;
+    char ts[9];
+    rtc_tod_format(rtc_tod_seconds(), ts);
+    int n = snprintf(g_log_line, LOG_LINE_MAX, "%s %s: Setting clock from %s to %s\n",
+                     ts, source, from, to);
+    if (n > 0)
+        log_stage_text(g_log_line, (size_t)n < LOG_LINE_MAX ? (size_t)n
+                                                            : LOG_LINE_MAX - 1u);
 }
 
 /* ---------------------------------------------------------------------------
@@ -493,6 +548,8 @@ bool lwip_log_file_start(uint8_t max_archive_slots)
     g_prev_cb     = lwip_get_event_cb();
     g_running     = true;
     lwip_set_event_cb(log_event_cb);
+
+    log_session_start_line();
 
     /* Unclean-shutdown detection: see the ring metadata layout above. */
     log_ring_t r;

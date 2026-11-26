@@ -69,11 +69,39 @@ clean:
 
 # Package output of `make dylib` (and readmes) into `lwip.zip`
 RELEASE_TOOLS := tools/helpers/lwip-cert-converter tools/bridge/lwip-acm-bridge.py tools/bridge/lwip-acm-bridge.md
+
+# Root certificate store bundled into lwip.zip. Downloaded fresh for every
+# release from the truststore-latest tag, unless TRUSTSTORE names a local
+# lwIPCERT.8xv (offline builds, or pinning a specific store). The release
+# fails if the store's format doesn't match TLS_TRUSTSTORE_VERSION, since
+# the library would reject it.
+TRUSTSTORE ?=
+TRUSTSTORE_URL := https://github.com/cagscalclabs/lwip-ce/releases/download/truststore-latest/lwIPCERT.8xv
+TRUSTSTORE_STAGE := bin/release-truststore
+
+.PHONY: fetch-truststore
+fetch-truststore:
+	@set -e; \
+	rm -rf "$(TRUSTSTORE_STAGE)"; \
+	mkdir -p "$(TRUSTSTORE_STAGE)"; \
+	if [ -n "$(TRUSTSTORE)" ]; then \
+		cp "$(TRUSTSTORE)" "$(TRUSTSTORE_STAGE)/lwIPCERT.8xv"; \
+		source="$(TRUSTSTORE)"; \
+	else \
+		echo "Downloading $(TRUSTSTORE_URL)"; \
+		curl -fsSL --retry 3 -o "$(TRUSTSTORE_STAGE)/lwIPCERT.8xv" "$(TRUSTSTORE_URL)"; \
+		source="$(TRUSTSTORE_URL)"; \
+	fi; \
+	python3 tools/build/scripts/check_truststore.py \
+		"$(TRUSTSTORE_STAGE)/lwIPCERT.8xv" src/tls/includes/truststore.h \
+		--source "$$source" --out "$(TRUSTSTORE_STAGE)/TRUSTSTORE.txt"
+
 .PHONY: release
-release:
+release: fetch-truststore
 	@if [ ! -d build ]; then echo "Run 'make dylib' first to produce build/"; exit 1; fi
 	rm -f lwip.zip
-	@release_stage=$$(mktemp -d); \
+	@set -e; \
+	release_stage=$$(mktemp -d); \
 	trap 'rm -rf "$$release_stage"' EXIT; \
 	mkdir -p "$$release_stage/lwip"; \
 	cp -R build/. "$$release_stage/lwip/"; \
@@ -82,6 +110,7 @@ release:
 	fi; \
 	cp -R examples "$$release_stage/lwip/examples"; \
 	cp README.md CHANGELOG.md SECURITY.md "$$release_stage/lwip/"; \
+	cp "$(TRUSTSTORE_STAGE)/lwIPCERT.8xv" "$(TRUSTSTORE_STAGE)/TRUSTSTORE.txt" "$$release_stage/lwip/"; \
 	mkdir -p "$$release_stage/lwip/tools"; \
 	cp $(RELEASE_TOOLS) "$$release_stage/lwip/tools/"; \
 	cd "$$release_stage"; \

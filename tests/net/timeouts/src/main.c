@@ -1,13 +1,12 @@
-/* NETTMO: socket inactivity timeouts are per socket (issue #93).
- *
- * The watchdog used to be extended by any frame on the interface, so a silent
- * or hung socket never timed out while anything else was on the wire. Three
- * checks, each of which the old behaviour fails:
+/* NETTMO: socket inactivity timeouts are per socket (issue #93) and cover
+ * connection setup only (issue #113).
  *
  *   1. a connect to a host that never answers fails at its own window while
- *      the host is sending unrelated ICMP traffic;
- *   2. a connected socket that goes quiet fails at its window under the same
- *      traffic;
+ *      the host is sending unrelated ICMP traffic. The watchdog used to be
+ *      extended by any frame on the interface, so this never timed out;
+ *   2. a connected socket that goes quiet stays connected well past its
+ *      window. Idle established sessions are normal (IRC between PINGs);
+ *      the watchdog used to kill them;
  *   3. a socket making progress is never killed by the watchdog.
  */
 #include <string.h>
@@ -67,15 +66,18 @@ static void test_idle_connected_socket_under_traffic(void)
     if (!check("idle: echo socket connected", s != NULL))
         return;
 
+    /* Three windows of silence on this socket, with unrelated traffic on the
+     * wire. Nothing may end the socket: pump() returns early only if it
+     * stops being active. */
     check("idle: unrelated traffic started", start_unrelated_traffic());
     t0 = now_ms();
-    pump(not_active, s, 20000);
+    pump(not_active, s, 3u * IDLE_MS);
     elapsed = now_ms() - t0;
-    metric("idle_timeout_ms", elapsed, "ms");
+    metric("idle_connected_ms", elapsed, "ms");
 
-    check("idle: quiet socket failed", lwip_socket_status(s) == LWIP_STATUS_ERROR);
-    check("idle: failed near its window (2-9 s)", elapsed >= 2000 && elapsed <= 9000);
-    lwip_socket_destroy(s);
+    check("idle: quiet socket still connected after 3 windows",
+          lwip_socket_status(s) == LWIP_STATUS_CONNECTED);
+    close_socket(s);
 }
 
 static void test_progress_keeps_socket_alive(void)

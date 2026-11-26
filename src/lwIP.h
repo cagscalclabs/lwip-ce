@@ -53,8 +53,8 @@ extern "C" {
 /** lwIP-CE release version (distinct from the vendored upstream lwIP version). */
 #define LWIP_CE_VERSION_MAJOR 3
 #define LWIP_CE_VERSION_MINOR 2
-#define LWIP_CE_VERSION_PATCH 2
-#define LWIP_CE_VERSION_STRING "3.2.2"
+#define LWIP_CE_VERSION_PATCH 3
+#define LWIP_CE_VERSION_STRING "3.2.3"
 
     struct netif;
     struct tcp_pcb;
@@ -334,8 +334,10 @@ bool lwip_are_services_ready(struct netif *netif, uint8_t flags);
  *  @param type       Transport selector (lwip_socket_type_t).
  *  @param bind       Netif preference (lwip_socket_bind_descriptor_t).
  *  @param addrinfo   NULL for DHCP; non-NULL for static IPv4.
- *  @param timeout_ms Inactivity watchdog window (ms) applied across all socket
- *                    states — connect, handshake, and data transfer.
+ *  @param timeout_ms Inactivity watchdog window (ms) for service wait,
+ *                    lookup, connect and the TLS/WebSocket handshake. It
+ *                    stops once the socket is CONNECTED, so an idle
+ *                    established session is never timed out.
  *                    0 = no inactivity timeout (app manages lifetime).
  *  @returns          Heap-allocated socket handle, or NULL on hard failure
  *                    (OOM or invalid arguments). */
@@ -398,10 +400,12 @@ void lwip_socket_on_event(struct lwip_socket *socket,
  *  as the main-loop exit condition. */
 bool lwip_socket_is_active(const struct lwip_socket *socket);
 
-/** Set (or update) the socket's timeout window.  Applies to all socket
- *  states — service wait, connect/handshake, and data transfer.  The
- *  deadline is extended by any inbound or outbound wire activity, so a
- *  socket making progress never times out.  0 = disable the timeout. */
+/** Set (or update) the socket's timeout window.  Applies until the socket
+ *  is connected: service wait, lookup, connect and the TLS/WebSocket
+ *  handshake.  The deadline is extended by this socket's own progress, so a
+ *  connect that is making progress never times out.  Once CONNECTED, the
+ *  socket is never timed out for being idle; a peer that disappears is
+ *  detected by TCP retransmission give-up.  0 = disable the timeout. */
 lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket,
                                      uint32_t timeout_ms);
 /** Write one transport chunk. len must fit in lwIP's 16-bit pbuf/TCP length

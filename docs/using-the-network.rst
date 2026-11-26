@@ -65,9 +65,11 @@ in another structure or allocate it on the stack. Use accessors such as
       ``lwip_socket_addrinfo_t`` supplies static ``ip``/``netmask``/``gateway``
       instead. The address settings are copied into the socket.
    :param timeout_ms: Inactivity watchdog window in milliseconds, covering
-      service wait, connection establishment, TLS handshake, and data transfer.
-      Network activity extends the deadline. ``0`` disables the inactivity
-      timeout; the application manages the socket's lifetime.
+      service wait, connection establishment, and the TLS handshake. The
+      socket's own progress extends the deadline. The watchdog stops once the
+      socket is connected, so an idle connection is never timed out. ``0``
+      disables the inactivity timeout; the application manages the socket's
+      lifetime.
    :returns: Owned socket pointer, or ``NULL`` on failure, including allocation
       failure, invalid arguments, an unsupported transport, a stopped stack,
       or failure to initialize the requested transport.
@@ -260,8 +262,10 @@ Some socket attributes are modifiable in flight should the situation call for it
 .. c:function:: lwip_error_t lwip_socket_set_timeout(struct lwip_socket *socket, uint32_t timeout_ms)
 
    Update the socket's timeout window after creation. It covers service
-   wait, connection establishment, handshake, and data transfer. The watchdog
-   re-arms on the next service tick; network activity extends the deadline.
+   wait, connection establishment, and the handshake, and stops once the
+   socket is connected. The watchdog re-arms on the next service tick; the
+   socket's own progress extends the deadline. A connected peer that
+   disappears is detected by TCP retransmission give-up instead.
 
    :param socket: An initialised socket handle.
    :param timeout_ms: New watchdog window in milliseconds. ``0`` disarms the

@@ -25,8 +25,9 @@
  *
  *   packed = seconds_since_midnight * PCAP_TS_FRAC_PER_SEC + fraction + 1
  *
- * seconds_since_midnight is rtc_Time(), the same clock as log-file lines, so
- * capture frames line up with log events. fraction is in 1/128 s (~7.8 ms).
+ * seconds_since_midnight is the RTC's wall-clock time of day (rtc_tod.h), the
+ * same clock and the same HH:MM:SS as log-file lines, so capture frames line
+ * up with log events and with the time the user saw. fraction is in 1/128 s (~7.8 ms).
  * The RTC has whole seconds only; the fraction is the time since the first
  * frame captured in that second (see pcap_timestamp() in pcap.c), so it is
  * monotonic within a second but not aligned to the RTC tick.

@@ -7,6 +7,7 @@
 #include <tice.h>
 
 #include "lwip/app_config.h"
+#include "lwip/log_file.h"
 
 volatile bool g_sntp_time_set = false;
 
@@ -103,8 +104,17 @@ static int32_t locale_offset_seconds(void)
     return off;
 }
 
-/* Write a UTC Unix timestamp to the RTC as local time. */
-static void rtc_write_with_locale(uint32_t utc_seconds)
+static void format_rtc_fields(char out[20], uint8_t sec, uint8_t min, uint8_t hr,
+                              uint8_t day, uint8_t month, uint16_t year)
+{
+    snprintf(out, 20, "%04u-%02u-%02u %02u:%02u:%02u", (unsigned)year, (unsigned)month,
+             (unsigned)day, (unsigned)hr, (unsigned)min, (unsigned)sec);
+}
+
+/* Write a UTC Unix timestamp to the RTC as local time. If that changes the
+ * clock, the file log gets a "<source>: Setting clock from .. to .." line
+ * first (stamped with the old time), so later jumps in log times are explained. */
+static void rtc_write_with_locale(uint32_t utc_seconds, const char *source)
 {
     int64_t local = (int64_t)utc_seconds + (int64_t)locale_offset_seconds();
     if (local < 0)
@@ -113,6 +123,20 @@ static void rtc_write_with_locale(uint32_t utc_seconds)
     uint8_t secs, minutes, hours, day, month;
     uint16_t year;
     unix_seconds_to_rtc_fields((uint32_t)local, &secs, &minutes, &hours, &day, &month, &year);
+
+    uint8_t osec, omin, ohr, oday, omonth;
+    uint16_t oyear;
+    while (rtc_IsBusy()) {}
+    boot_GetTime(&osec, &omin, &ohr);
+    boot_GetDate(&oday, &omonth, &oyear);
+    if (osec != secs || omin != minutes || ohr != hours
+        || oday != day || omonth != month || oyear != year)
+    {
+        char from[20], to[20];
+        format_rtc_fields(from, osec, omin, ohr, oday, omonth, oyear);
+        format_rtc_fields(to, secs, minutes, hours, day, month, year);
+        lwip_log_file_clock_set(source, from, to);
+    }
 
     while (rtc_IsBusy()) {}
     boot_SetTime(secs, minutes, hours);
@@ -140,7 +164,7 @@ static uint32_t rtc_read_with_locale(void)
 
 void lwip_sntp_set_time(uint32_t seconds)
 {
-    rtc_write_with_locale(seconds);
+    rtc_write_with_locale(seconds, "SNTP");
     g_sntp_time_set = true;
 }
 
@@ -165,5 +189,5 @@ void lwip_sntp_clamp_rtc_floor(uint32_t floor_unix_seconds)
          * clamp, not an SNTP sync. */
         return;
     }
-    rtc_write_with_locale(floor_unix_seconds);
+    rtc_write_with_locale(floor_unix_seconds, "CLOCK-FLOOR");
 }
