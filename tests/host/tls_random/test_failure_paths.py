@@ -211,7 +211,7 @@ health_log = C_SOURCE.split("static void tls_rng_log_health_failure", 1)[1].spli
 assert re.search(r"WARN_CODE\(LWIP_E[0-9A-F]{4}, mask\);", health_log)
 assert "ERROR_CODE" not in health_log
 assert "ERROR_INFO" not in health_log
-assert '"%lu: EVT: ERR: %s %s\\n"' in LOG_SOURCE
+assert '"%s EVT: ERR: %s %s\\n"' in LOG_SOURCE
 
 
 stats_body = C_SOURCE.split("bool tls_rng_compute_stats", 1)[1]
