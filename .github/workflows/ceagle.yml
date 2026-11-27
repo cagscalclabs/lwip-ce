@@ -1,0 +1,43 @@
+name: Publish to CEagle
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, like v3.2.3
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern lwip.zip --dir "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/lwip.zip" -d "$RUNNER_TEMP/release"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$RUNNER_TEMP/release/lwip/NOTES.md"
+          cat > "$RUNNER_TEMP/release/lwip/ceagle.toml" <<'EOF'
+          project = "lwip-ce"
+          files   = ["appinst/lwIPINST.8xp", "appinst/LWIP.*.8xv", "lwip.8xv", "lwIPCERT.8xv"]
+          main    = "INSTALL"
+          EOF
+      - uses: TICEagle/publish@v1
+        with:
+          version: ${{ env.TAG }}
+          working-directory: ${{ runner.temp }}/release/lwip
+          notes: NOTES.md
